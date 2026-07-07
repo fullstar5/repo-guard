@@ -11,6 +11,19 @@ class Settings(BaseSettings):
     upstash_redis_rest_url: str
     upstash_redis_rest_token: str
 
+    github_client_id: str
+    github_client_secret: str
+    github_redirect_uri: str
+
+    frontend_url: str
+    github_oauth_scope: str
+    oauth_state_cookie_name: str
+    cookie_secure: bool
+
+    jwt_secret_key: str
+    jwt_algorithm: str
+    access_token_expire_minutes: int
+
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",
         env_file_encoding="utf-8",
