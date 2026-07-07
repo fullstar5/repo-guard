@@ -62,7 +62,12 @@ async def github_callback(
     github_user = await fetch_github_user(http_client, token_response.access_token)
     primary_email = await fetch_primary_email(http_client, token_response.access_token)
 
-    user = await upsert_github_user(db, github_user, primary_email)
+    user = await upsert_github_user(
+        db=db,
+        github_user=github_user,
+        token_data=token_response,
+        email=primary_email,
+    )
 
     return build_auth_response(user)
 
