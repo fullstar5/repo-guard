@@ -6,7 +6,7 @@ from sqlalchemy import pool
 from alembic import context
 
 from app.core.config import get_settings
-from app.models import User  # noqa: F401
+from app.models import User, PRFile, PullRequest, Repository # noqa: F401
 from app.models.base import Base
 
 # this is the Alembic Config object, which provides
