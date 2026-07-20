@@ -13,7 +13,7 @@ class OpenRouterReviewProvider(ReviewProvider):
         self.http_client = http_client
         self.model_name = model_name
 
-    async def review_chunk(self, chunk_content: str) -> str:
+    async def review_content(self, content: str) -> str:
         # Keep the prompt small and focused so free models can respond reliably.
         response = await self.http_client.post(
             f"{settings.open_router_base_url}/chat/completions",
@@ -25,18 +25,21 @@ class OpenRouterReviewProvider(ReviewProvider):
             },
             json={
                 "model": self.model_name,
+                "temperature": 0.2,
                 "messages": [
                     {
                         "role": "system",
                         "content": (
                             "You are an expert code reviewer. "
-                            "Focus on bugs, correctness, security issues, "
-                            "performance risks, and maintainability concerns."
+                            "Review the provided pull request diff carefully. "
+                            "Focus on correctness, bugs, security risks, performance issues, "
+                            "and maintainability concerns. "
+                            "When possible, mention file names in your findings."
                         ),
                     },
                     {
                         "role": "user",
-                        "content": chunk_content,
+                        "content": content,
                     },
                 ],
             },

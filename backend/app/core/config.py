@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     app_public_url: str = "http://localhost:3000"
     app_name: str = "CodeGuard AI"
 
+    # review config
+    review_max_combined_chars: int = 24000
+    review_max_patch_chars: int = 4000
+    review_max_combined_files: int = 30
+
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",
         env_file_encoding="utf-8",

@@ -13,6 +13,7 @@ class DiffChunk:
     chunk_index: int
     content: str
 
+
 def split_patch_by_hunks(patch: str, max_chars: int = 4000) -> list[str]:
     """Split a GitHub patch into chunks, preferring hunk boundaries."""
     if not patch:
@@ -87,3 +88,46 @@ def build_review_chunks(
                 )
             )
     return chunks
+
+
+
+def build_combined_review_input(
+    pr_files: list[PRFile],
+    max_combined_chars: int = 24000,
+    max_combined_files: int = 30,
+) -> str | None:
+    """build one review payload for whole PR when PR is small to save API calls"""
+    sections: list[str] = []
+    total_chars = 0
+    file_count = 0
+
+    for pr_file in pr_files:
+        if not pr_file.patch:
+            continue
+
+        section = (
+            f"File: {pr_file.filename}\n"
+            f"Status: {pr_file.status}\n"
+            f"Additions: {pr_file.additions}, Deletions: {pr_file.deletions}\n\n"
+            f"{pr_file.patch}\n"
+        )
+
+        if total_chars + len(section) > max_combined_chars:
+            return None
+
+        sections.append(section)
+        total_chars += len(section)
+        file_count += 1
+
+        if file_count > max_combined_files:
+            return None
+        
+    
+    if not sections:
+        return None
+
+    return (
+        "Review the following pull request diff.\n"
+        "Return the most important issues you can find.\n\n"
+        + "\n\n".join(sections)
+    )
