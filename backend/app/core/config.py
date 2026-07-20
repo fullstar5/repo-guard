@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     jwt_algorithm: str
     access_token_expire_minutes: int
 
+    open_router_api_key: str
+    open_router_base_url: str = "https://openrouter.ai/api/v1"
+    open_router_default_model: str = "openrouter/free"
+    app_public_url: str = "http://localhost:3000"
+    app_name: str = "CodeGuard AI"
+
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",
         env_file_encoding="utf-8",

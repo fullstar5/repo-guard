@@ -7,7 +7,7 @@ from app.models.pr_file import PRFile
 from app.models.repository import Repository
 
 
-
+# get PR files from github and sync to database
 
 async def fetch_github_pull_request_files(
     http_client: httpx.AsyncClient,
