@@ -9,6 +9,7 @@ from app.models.pull_request import PullRequest
 from app.models.repository import Repository
 
 
+# get PR from github and sync to database
 
 def parse_github_datetime(value: str | None) -> datetime | None:
     if value is None:
