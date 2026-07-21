@@ -47,4 +47,4 @@ class PullRequest(Base):
     )
     
     repository = relationship("Repository", back_populates="pull_requests")
-    files = relationship("PRFile", back_populates="pull_request")
+    files = relationship("PRFile", back_populates="pull_request", cascade="all, delete-orphan")

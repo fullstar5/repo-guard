@@ -10,6 +10,7 @@ from app.services.review_jobs import (
     create_review_job,
     execute_review_job,
     get_pull_request_for_user,
+    get_review_job_with_findings_for_user,
 )
 
 router = APIRouter(prefix="/pull-requests", tags=["review-jobs"])
@@ -50,4 +51,15 @@ async def create_pull_request_review_job(
         http_client=http_client,
     )
 
-    return ReviewJobRead.model_validate(review_job)
+    review_job_with_findings = await get_review_job_with_findings_for_user(
+        db=db,
+        review_job_id=review_job.id,
+        user_id=current_user.id,
+    )
+    if review_job_with_findings is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Review job not found",
+        )
+
+    return ReviewJobRead.model_validate(review_job_with_findings)

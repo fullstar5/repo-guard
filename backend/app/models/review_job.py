@@ -54,3 +54,8 @@ class ReviewJob(Base):
     )
 
     pull_request = relationship("PullRequest")
+    findings = relationship(
+        "ReviewFinding",
+        back_populates="review_job",
+        cascade="all, delete-orphan",
+    )
