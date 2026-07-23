@@ -1,4 +1,5 @@
 import httpx
+import logging
 
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,13 +13,14 @@ from app.models.review_job import ReviewJob, ReviewJobStatus
 from app.services.diff_chunking import build_review_chunks, build_combined_review_input
 from app.services.openrouter_provider import OpenRouterReviewProvider
 from app.models.review_finding import ReviewFinding, ReviewFindingSeverity
-from app.services.review_provider import ReviewFindingDraft
+from app.services.review_provider import ReviewFindingDraft, ReviewResult
 
 
 
 
 # pull PR and PR files from database and create/execute review jobs, and store jobs and results in database 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 async def get_pull_request_for_user(
     db: AsyncSession,
@@ -102,6 +104,39 @@ def _dedup_findings(findings: list[ReviewFindingDraft]) -> list[ReviewFindingDra
 
 
 
+async def _review_content_with_retries(
+    provider: OpenRouterReviewProvider,
+    content: str,
+    *,
+    request_label: str,
+    attempt_count: int = 3,
+) -> ReviewResult:
+    last_exc: Exception | None = None
+
+    for attempt in range(1, attempt_count + 1):
+        try:
+            return await provider.review_content(content)
+        except Exception as exc:
+            last_exc = exc
+            logger.warning(
+                "Review attempt %s %s failed for %s: %s",
+                attempt,
+                attempt_count,
+                request_label,
+                exc,
+            )
+
+    assert last_exc is not None
+    logger.error(
+        "Review failed after %s attempts for %s: %s",
+        attempt_count,
+        request_label,
+        last_exc,
+    )
+    raise last_exc
+
+
+
 async def replace_review_findings(
     db: AsyncSession,
     review_job: ReviewJob,
@@ -143,6 +178,7 @@ async def create_review_job(
         pr_files,
         max_combined_chars=settings.review_max_combined_chars,
         max_combined_files=settings.review_max_combined_files,
+        max_combined_changes=settings.review_max_combined_changes,
     )
 
     if combined_input is not None:
@@ -192,13 +228,20 @@ async def execute_review_job(
             pr_files,
             max_combined_chars=settings.review_max_combined_chars,
             max_combined_files=settings.review_max_combined_files,
+            max_combined_changes=settings.review_max_combined_changes,
         )
 
         if combined_input is not None:
             # Fast path: review the whole PR in one request.
-            review_result = await provider.review_content(combined_input)
+            review_result = await _review_content_with_retries(
+                provider,
+                combined_input,
+                request_label="combined review",
+                attempt_count=settings.review_retry_attempts,
+            )
             review_job.result_summary = review_result.summary
             review_job.total_chunks = 1
+            review_job.error_message = None
 
             await replace_review_findings(
                 db=db,
@@ -212,20 +255,39 @@ async def execute_review_job(
                 pr_files,
                 max_patch_chars=settings.review_max_patch_chars,
             )
+            if not chunks:
+                raise ValueError("No reviewable patch content found for this pull request.")
             summary_sections: list[str] = []
             all_findings: list[ReviewFindingDraft] = []
+            chunk_errors: list[str] = []
 
             for chunk in chunks:
-                result = await provider.review_content(chunk.content)
-                summary_sections.append(
-                    f"## {chunk.filename} [chunk {chunk.chunk_index + 1}]\n{result.summary}"
-                )
+                chunk_label = f"{chunk.filename} [chunk {chunk.chunk_index + 1}]"
+
+                try:
+                    result = await _review_content_with_retries(
+                        provider,
+                        chunk.content,
+                        request_label=chunk_label,
+                        attempt_count=settings.review_retry_attempts,
+                    )
+                except Exception as exc:
+                    chunk_errors.append(
+                        f"{chunk_label}: failed after {settings.review_retry_attempts} attempts: {exc}"
+                    )
+                    continue
+
+                summary_sections.append(f"## {chunk_label}\n{result.summary}")
                 all_findings.extend(
                     _apply_file_path_fallback(result.findings, chunk.filename)
                 )
+            
+            if not summary_sections:
+                raise ValueError("All review chunks failed. " + " | ".join(chunk_errors))
 
             review_job.result_summary = "\n\n".join(summary_sections)
             review_job.total_chunks = len(chunks)
+            review_job.error_message = "\n".join(chunk_errors) if chunk_errors else None
 
             await replace_review_findings(
                 db=db,
@@ -235,7 +297,6 @@ async def execute_review_job(
             )
         
         review_job.status = ReviewJobStatus.completed
-        review_job.error_message = None
 
         await db.commit()
         await db.refresh(review_job)

@@ -95,15 +95,19 @@ def build_combined_review_input(
     pr_files: list[PRFile],
     max_combined_chars: int = 24000,
     max_combined_files: int = 30,
+    max_combined_changes: int = 1000,
 ) -> str | None:
     """build one review payload for whole PR when PR is small to save API calls"""
     sections: list[str] = []
     total_chars = 0
     file_count = 0
+    total_changes = 0
 
     for pr_file in pr_files:
         if not pr_file.patch:
             continue
+        
+        file_changes = pr_file.changes or (pr_file.additions + pr_file.deletions)
 
         section = (
             f"File: {pr_file.filename}\n"
@@ -115,13 +119,16 @@ def build_combined_review_input(
         if total_chars + len(section) > max_combined_chars:
             return None
 
+        if file_count + 1 > max_combined_files:
+            return None
+
+        if total_changes + file_changes > max_combined_changes:
+            return None
+
         sections.append(section)
         total_chars += len(section)
         file_count += 1
-
-        if file_count > max_combined_files:
-            return None
-        
+        total_changes += file_changes
     
     if not sections:
         return None

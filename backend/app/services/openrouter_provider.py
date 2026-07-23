@@ -130,7 +130,14 @@ class OpenRouterReviewProvider(ReviewProvider):
 
         payload = response.json()
         raw_content = payload["choices"][0]["message"]["content"]
-        return self._parse_review_response(raw_content)
+
+        if not isinstance(raw_content, str):
+            raw_content = json.dumps(raw_content, ensure_ascii=False)
+
+        try:
+            return self._parse_review_response(raw_content)
+        except ValueError as exc:
+            raise ValueError(f"{exc} Raw model output preview {raw_content}") from exc
 
 
     def _parse_review_response(self, raw_content: str) -> ReviewResult:
