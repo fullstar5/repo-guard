@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     app_public_url: str = "http://localhost:3000"
     app_name: str = "CodeGuard AI"
 
+    # Use larger defaults for debugging single-request review behavior first.
+    review_max_combined_chars: int = 120000
+    review_max_patch_chars: int = 20000
+    review_max_combined_files: int = 30
+    review_max_combined_changes: int = 1000
+    review_retry_attempts: int = 3
+
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",
         env_file_encoding="utf-8",

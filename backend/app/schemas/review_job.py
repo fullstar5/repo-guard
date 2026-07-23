@@ -2,8 +2,9 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.review_finding import ReviewFindingRead
 
 
 
@@ -22,6 +23,7 @@ class ReviewJobRead(BaseModel):
     total_chunks: int
     error_message: str | None = None
     result_summary: str | None = None
+    findings: list[ReviewFindingRead] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
