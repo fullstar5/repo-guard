@@ -13,10 +13,10 @@ from app.services.review_jobs import (
     get_review_job_with_findings_for_user,
 )
 
-router = APIRouter(prefix="/pull-requests", tags=["review-jobs"])
+router = APIRouter(tags=["review-jobs"])
 
 
-@router.post("/{pull_request_id}/review-jobs", response_model=ReviewJobRead)
+@router.post("/pull-requests/{pull_request_id}/review-jobs", response_model=ReviewJobRead)
 async def create_pull_request_review_job(
     pull_request_id: int,
     payload: CreateReviewJobRequest,
@@ -63,3 +63,27 @@ async def create_pull_request_review_job(
         )
 
     return ReviewJobRead.model_validate(review_job_with_findings)
+
+
+
+
+@router.get("/review-jobs/{review_job_id}", response_model=ReviewJobRead)
+async def get_review_job_by_id_and_user(
+    review_job_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fetch one review job with nested findings for the current user"""
+    review_job = await get_review_job_with_findings_for_user(
+        db=db,
+        review_job_id=review_job_id,
+        user_id=current_user.id,
+    )
+
+    if review_job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Review job not found",
+        )
+
+    return ReviewJobRead.model_validate(review_job)

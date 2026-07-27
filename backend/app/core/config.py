@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     review_max_combined_changes: int = 1000
     review_retry_attempts: int = 3
 
+
+    # RabbitMQ and celery
+    rabbitmq_url: str = "amqp://guest:guest@localhost:5672//"
+    celery_result_backend: str = "rpc://"
+
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",
         env_file_encoding="utf-8",
