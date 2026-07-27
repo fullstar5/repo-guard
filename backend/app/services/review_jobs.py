@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import get_settings
+from app.core.database import AsyncSessionLocal
 from app.models.pr_file import PRFile
 from app.models.pull_request import PullRequest
 from app.models.repository import Repository
@@ -315,3 +316,20 @@ async def execute_review_job(
         await db.commit()
         await db.refresh(failed_job)
         return failed_job
+
+
+
+async def execute_review_job_by_id(review_job_id: int) -> ReviewJob | None:
+    """Load one review job in a fresh async session (rabbitMQ and celery) and execute it."""
+    async with AsyncSessionLocal() as db:
+        review_job = await db.get(ReviewJob, review_job_id)
+        if review_job is None:
+            logger.warning("Review job %s was not found", review_job_id)
+            return None
+        
+        async with httpx.AsyncClient(timeout=5.0) as http_client:
+            return await execute_review_job(
+                db=db,
+                review_job=review_job,
+                http_client=http_client,
+            )
