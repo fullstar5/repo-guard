@@ -1,3 +1,4 @@
+import stat
 import httpx
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -5,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db
 from app.models.user import User
+from app.models.review_job import ReviewJobStatus
 from app.schemas.review_job import CreateReviewJobRequest, ReviewJobRead
 from app.services.review_jobs import (
     create_review_job,
@@ -12,6 +14,7 @@ from app.services.review_jobs import (
     get_pull_request_for_user,
     get_review_job_with_findings_for_user,
 )
+from app.tasks.review_jobs import execute_review_job_task
 
 router = APIRouter(tags=["review-jobs"])
 
@@ -50,6 +53,20 @@ async def create_pull_request_review_job(
         review_job=review_job,
         http_client=http_client,
     )
+
+    # using rabbitMQ and celery worker to enqueue job
+    try:
+        execute_review_job_task.delay(review_job.id)
+    except Exception as exc:
+        review_job.status = ReviewJobStatus.failed
+        review_job.error_message = f"Failed to enqueue review job: {exc}"
+        await db.commit()
+        await db.refresh(review_job)
+
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Failed to enqueue review job",
+        ) from exc
 
     review_job_with_findings = await get_review_job_with_findings_for_user(
         db=db,
