@@ -1,9 +1,9 @@
-import httpx
+import httpx  # pyright: ignore[reportMissingImports]
 import logging
 
-from sqlalchemy import select, delete
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy import select, delete  # pyright: ignore[reportMissingImports]
+from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
+from sqlalchemy.orm import selectinload  # pyright: ignore[reportMissingImports]
 
 from app.core.config import get_settings
 from app.core.database import AsyncSessionLocal
@@ -212,6 +212,12 @@ async def execute_review_job(
 ) -> ReviewJob:
     """Run a review job synchronously using the configured online provider."""
     pr_files = await get_pull_request_files(db, review_job.pull_request_id)
+    logger.info(
+        "Starting execute_review_job review_job_id=%s pull_request_id=%s total_files=%s",
+        review_job.id,
+        review_job.pull_request_id,
+        len(pr_files),
+    )
 
     review_job.status = ReviewJobStatus.processing
     await db.commit()
@@ -233,6 +239,7 @@ async def execute_review_job(
         )
 
         if combined_input is not None:
+            logger.info("Review job %s using combined-input path", review_job.id)
             # Fast path: review the whole PR in one request.
             review_result = await _review_content_with_retries(
                 provider,
@@ -240,10 +247,12 @@ async def execute_review_job(
                 request_label="combined review",
                 attempt_count=settings.review_retry_attempts,
             )
+            logger.info("Review job %s finished provider call for combined path", review_job.id)
             review_job.result_summary = review_result.summary
             review_job.total_chunks = 1
             review_job.error_message = None
 
+            logger.info("Review job %s replacing findings for combined path", review_job.id)
             await replace_review_findings(
                 db=db,
                 review_job=review_job,
@@ -251,6 +260,7 @@ async def execute_review_job(
                 findings=review_result.findings,
             )
         else:
+            logger.info("Review job %s using chunked path", review_job.id)
             # Fallback path: split oversized PRs into smaller reviewable units.
             chunks = build_review_chunks(
                 pr_files,
@@ -290,6 +300,7 @@ async def execute_review_job(
             review_job.total_chunks = len(chunks)
             review_job.error_message = "\n".join(chunk_errors) if chunk_errors else None
 
+            logger.info("Review job %s replacing findings for chunked path", review_job.id)
             await replace_review_findings(
                 db=db,
                 review_job=review_job,
@@ -298,9 +309,11 @@ async def execute_review_job(
             )
         
         review_job.status = ReviewJobStatus.completed
+        logger.info("Review job %s committing completed state", review_job.id)
 
         await db.commit()
         await db.refresh(review_job)
+        logger.info("Review job %s completed successfully", review_job.id)
         return review_job
 
     except Exception as exc:
@@ -333,3 +346,42 @@ async def execute_review_job_by_id(review_job_id: int) -> ReviewJob | None:
                 review_job=review_job,
                 http_client=http_client,
             )
+
+
+async def list_review_jobs_for_pull_request_for_user(
+    db: AsyncSession,
+    pull_request_id: int,
+    user_id: int,
+) -> list[ReviewJob]:
+    """list review jobs for one pull request, scoped to the current user"""
+    res = await db.execute(
+        select(ReviewJob).join(PullRequest, ReviewJob.pull_request_id == PullRequest.id)
+        .join(Repository, PullRequest.repository_id == Repository.id)
+        .options(selectinload(ReviewJob.findings))
+        .where(
+            ReviewJob.pull_request_id == pull_request_id,
+            Repository.user_id == user_id,
+        ).order_by(ReviewJob.created_at.desc())
+    )
+
+    return list(res.scalars().all())
+
+
+
+async def mark_review_job_failed_by_id(
+    review_job_id: int,
+    error_message: str,
+) -> ReviewJob | None:
+    """Mark review job as failed (exceed time limit, out of retries, etc)"""
+    async with AsyncSessionLocal() as db:
+        review_job = await db.get(ReviewJob, review_job_id)
+        if review_job is None:
+            logger.warning("Review job %s was not found while marking failed.", review_job_id)
+            return None
+
+        review_job.status = ReviewJobStatus.failed
+        review_job.error_message = error_message
+
+        await db.commit()
+        await db.refresh(review_job)
+        return review_job
