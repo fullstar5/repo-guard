@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     celery_task_max_retries: int = 3
     celery_task_retry_backoff_seconds: int = 5   # wait for x second before next try
     celery_task_retry_backoff_max: int = 300   #
+    celery_task_soft_time_limit: int = 660   # allow graceful failure handling before hard kill
     celery_task_time_limit: int = 720   # hard stop on job if exceed this time
 
     model_config = SettingsConfigDict(
