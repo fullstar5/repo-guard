@@ -13,11 +13,11 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 
 
-TRANSIENT_TASK_ERRORS = {
+TRANSIENT_TASK_ERRORS = (
     httpx.HTTPError,
     httpx.TimeoutException,
     OSError,
-}
+)
 
 
 def _retry_countdown(next_retry: int) -> int:
@@ -27,16 +27,16 @@ def _retry_countdown(next_retry: int) -> int:
 
 
 @celery_app.task(
-    bind=True, 
+    bind=True,   # so can use self.retry() and self.request.retries
     name="app.tasks.review_jobs.execute_review_job",
     max_retries=settings.celery_task_max_retries,
-    hard_time_limit=settings.celery_task_time_limit,
+    time_limit=settings.celery_task_time_limit,
 )
 def execute_review_job_task(self, review_job_id: int) -> dict[str, object]:
     logger.info(
         "Starting review job task review_job_id=%s, task_id=%s, retry=%s",
         review_job_id,
-        self.request_id,
+        self.request.id,
         self.request.retries,
     )
 
@@ -56,7 +56,7 @@ def execute_review_job_task(self, review_job_id: int) -> dict[str, object]:
         )
 
         return {
-            "review_job_id": review_job_id,
+            "review_job_id": review_job.id,
             "status": review_job.status.value,
         }
 
