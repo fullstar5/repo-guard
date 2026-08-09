@@ -1,9 +1,9 @@
-import httpx
+import httpx  # pyright: ignore[reportMissingImports]
 import logging
 
-from sqlalchemy import select, delete
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy import select, delete  # pyright: ignore[reportMissingImports]
+from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
+from sqlalchemy.orm import selectinload  # pyright: ignore[reportMissingImports]
 
 from app.core.config import get_settings
 from app.core.database import AsyncSessionLocal
@@ -333,3 +333,22 @@ async def execute_review_job_by_id(review_job_id: int) -> ReviewJob | None:
                 review_job=review_job,
                 http_client=http_client,
             )
+
+
+async def list_review_jobs_for_pull_request_for_user(
+    db: AsyncSession,
+    pull_request_id: int,
+    user_id: int,
+) -> list[ReviewJob]:
+    """list review jobs for one pull request, scoped to the current user"""
+    res = await db.execute(
+        select(ReviewJob).join(PullRequest, ReviewJob.pull_request_id == PullRequest.id)
+        .join(Repository, PullRequest.repository_id == Repository.id)
+        .options(selectinload(ReviewJob.findings))
+        .where(
+            ReviewJob.pull_request_id == pull_request_id,
+            Repository.user_id == user_id,
+        ).order_by(ReviewJob.created_at.desc())
+    )
+
+    return list(res.scalars().all())
