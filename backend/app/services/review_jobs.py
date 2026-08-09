@@ -352,3 +352,23 @@ async def list_review_jobs_for_pull_request_for_user(
     )
 
     return list(res.scalars().all())
+
+
+
+async def mark_review_job_failed_by_id(
+    review_job_id: int,
+    error_message: str,
+) -> ReviewJob | None:
+    """Mark review job as failed (exceed time limit, out of retries, etc)"""
+    async with AsyncSessionLocal() as db:
+        review_job = await db.get(ReviewJob, review_job_id)
+        if review_job is None:
+            logger.warning("Review job %s was not found while marking failed.", review_job_id)
+            return None
+
+        review_job.status = ReviewJobStatus.failed
+        review_job.error_message = error_message
+
+        await db.commit()
+        await db.refresh(review_job)
+        return review_job
