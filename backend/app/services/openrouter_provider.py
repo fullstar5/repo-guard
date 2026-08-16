@@ -1,4 +1,4 @@
-import httpx
+import httpx  # pyright: ignore[reportMissingImports]
 import re
 import json
 
@@ -124,7 +124,6 @@ class OpenRouterReviewProvider(ReviewProvider):
                     },
                 ],
             },
-            timeout=120.0,
         )
         response.raise_for_status()
 

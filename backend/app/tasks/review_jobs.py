@@ -6,7 +6,11 @@ from billiard.exceptions import SoftTimeLimitExceeded  # pyright: ignore[reportM
 
 from app.core.config import get_settings
 from app.core.celery_app import celery_app
-from app.services.review_jobs import execute_review_job_by_id, mark_review_job_failed_by_id
+from app.services.review_jobs import (
+    execute_review_job_by_id, 
+    mark_review_job_failed_by_id,
+    mark_abandoned_jobs_as_failed,
+)
 
 
 
@@ -67,8 +71,16 @@ def execute_review_job_task(self, review_job_id: int) -> dict[str, object]:
             f"Review job exceeded soft time limit "
             f"({settings.celery_task_soft_time_limit}s)."
         )
-        asyncio.run(mark_review_job_failed_by_id(review_job_id, message))
-        logger.exception("Review job %s exceeded soft time limit.", review_job_id)
+        try:
+            asyncio.run(mark_review_job_failed_by_id(review_job_id, message))
+        except Exception:
+            logger.exception("Failed to persist soft-timeout failure for review_job_id=%s", review_job_id)
+        logger.error(
+            "review job %s exceeded soft time limit (task_id=%s, retry=%s)",
+            review_job_id,
+            self.request.id,
+            self.request.retries,
+        )
         raise
 
     except TRANSIENT_TASK_ERRORS as exc:
@@ -101,3 +113,14 @@ def execute_review_job_task(self, review_job_id: int) -> dict[str, object]:
 
 
 
+@celery_app.task(
+    name="app.tasks.review_jobs.mark_abandoned_jobs_as_failed",
+    soft_time_limit=30,
+    time_limit=45,
+)
+def mark_abandoned_jobs() -> dict[str, int]:
+    """Periodically mark killed tasks as failed"""
+    logger.info("Starting stale review job reclaim task")
+    failed = asyncio.run(mark_abandoned_jobs_as_failed())
+    logger.info("Finished stale review jobs reclaim task, cleaned=%s", failed)
+    return {"cleaned": failed}

@@ -28,6 +28,12 @@ celery_app.conf.update(
     task_acks_late=True,   # acknowledge after task execution so crashed workers can re-deliver
     worker_prefetch_multiplier=1,
     broker_connection_retry_on_startup=True,
+    beat_schedule={
+        "reclaim-stale-review-jobs": {
+            "task": "app.tasks.review_jobs.mark_abandoned_jobs_as_failed",
+            "schedule": settings.celery_task_reclaim_interval_seconds,
+        }
+    }
 )
 
 

@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     app_public_url: str = "http://localhost:3000"
     app_name: str = "CodeGuard AI"
 
+    # OpenRouter timeouts:
+    openrouter_connect_timeout: float = 10.0
+    openrouter_read_timeout: float = 120.0
+
     # Use larger defaults for debugging single-request review behavior first.
     review_max_combined_chars: int = 120000
     review_max_patch_chars: int = 20000
@@ -47,6 +51,10 @@ class Settings(BaseSettings):
     celery_task_retry_backoff_max: int = 300   #
     celery_task_soft_time_limit: int = 660   # allow graceful failure handling before hard kill
     celery_task_time_limit: int = 720   # hard stop on job if exceed this time
+
+    celery_task_reclaim_interval_seconds: float = 600   # auto mark stale jobs as failed
+    review_job_stale_processing_seconds: int = 900   # if a job stays in 'processing' longer than this, abandoned
+
 
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",
