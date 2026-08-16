@@ -1,5 +1,6 @@
 import httpx  # pyright: ignore[reportMissingImports]
 import logging
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, delete  # pyright: ignore[reportMissingImports]
 from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
@@ -340,7 +341,24 @@ async def execute_review_job_by_id(review_job_id: int) -> ReviewJob | None:
             logger.warning("Review job %s was not found", review_job_id)
             return None
         
-        async with httpx.AsyncClient(timeout=5.0) as http_client:
+        # if the job has failed or completed, skip
+        TERMINAL = {ReviewJobStatus.completed, ReviewJobStatus.failed}
+        if review_job.status in TERMINAL:
+            logger.info(
+                "Skip review_job=%s because status=%s ",
+                review_job.id,
+                review_job.status.value,
+            )
+            return review_job
+
+        timeout = httpx.Timeout(
+            connect=settings.openrouter_connect_timeout,
+            read=settings.openrouter_read_timeout,
+            write=30.0,
+            pool=30.0,
+        )
+
+        async with httpx.AsyncClient(timeout=timeout) as http_client:
             return await execute_review_job(
                 db=db,
                 review_job=review_job,
@@ -372,7 +390,7 @@ async def mark_review_job_failed_by_id(
     review_job_id: int,
     error_message: str,
 ) -> ReviewJob | None:
-    """Mark review job as failed (exceed time limit, out of retries, etc)"""
+    """Mark review job as failed (exceed time limit, out of retriesetc)"""
     async with AsyncSessionLocal() as db:
         review_job = await db.get(ReviewJob, review_job_id)
         if review_job is None:
@@ -385,3 +403,37 @@ async def mark_review_job_failed_by_id(
         await db.commit()
         await db.refresh(review_job)
         return review_job
+
+
+
+async def mark_abandoned_jobs_as_failed(
+    older_than_seconds: int | None = None,
+) -> int:
+    """Mark abandoned job as failed. Call by celery"""
+    threshold = older_than_seconds or settings.review_job_stale_processing_seconds
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=threshold)
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(ReviewJob).where(
+                ReviewJob.status == ReviewJobStatus.processing,
+                ReviewJob.updated_at < cutoff,
+            )
+        )
+
+        jobs = list(result.scalars().all())
+        for job in jobs:
+            job.status = ReviewJobStatus.failed
+            job.error_message = (
+                "Mark stale process job as failed"
+                f"(no update for {threshold}s)."
+            )
+            logger.warning(
+                "Mark stale review_job_id=%s updated_at=%s",
+                job.id,
+                job.updated_at,
+            )
+
+        if jobs:
+            await db.commit()
+        return len(jobs)

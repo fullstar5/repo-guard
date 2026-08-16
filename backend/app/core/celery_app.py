@@ -1,4 +1,7 @@
+import logging
+
 from celery import Celery  # pyright: ignore[reportMissingImports]
+from celery.signals import setup_logging  # pyright: ignore[reportMissingImports]
 
 from app.core.config import get_settings
 
@@ -28,6 +31,20 @@ celery_app.conf.update(
     task_acks_late=True,   # acknowledge after task execution so crashed workers can re-deliver
     worker_prefetch_multiplier=1,
     broker_connection_retry_on_startup=True,
+    beat_schedule={
+        "reclaim-stale-review-jobs": {
+            "task": "app.tasks.review_jobs.mark_abandoned_jobs_as_failed",
+            "schedule": settings.celery_task_reclaim_interval_seconds,
+        }
+    }
 )
 
 
+@setup_logging.connect
+def configure_celery_logging(**_kwargs) -> None:
+    """Keep worker/beat logs grep-friendly in production."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+        force=True,
+    )

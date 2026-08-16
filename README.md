@@ -25,7 +25,8 @@ CodeGuard AI 是一个面向开发者的 AI Code Review SaaS 项目。它的目�
 - Cache: Upstash Redis
 - GitHub Integration: GitHub App / OAuth, GitHub REST API
 - AI Review: OpenRouter API（当前），后续可扩展为更多 provider
-- Async / Infra（后续）: RabbitMQ, Celery, Docker, Kubernetes, Terraform
+- Async / Infra: RabbitMQ, Celery Worker, Celery Beat（已接入）；后续 Kubernetes / Terraform
+- Local Orchestration: Docker Compose（api + worker + beat + rabbitmq）
 - CI/CD: Github Actions
 
 Architeture最终完成的流程：Github -> Webhook -> BackendAPI -> RabbitMQ -> Celery -> OpenRouter -> Postgres -> Frontend
@@ -39,9 +40,11 @@ Architeture最终完成的流程：Github -> Webhook -> BackendAPI -> RabbitMQ -
 3. 同步用户可访问的 repositories
 4. 同步某个 repository 下的 pull requests
 5. 同步某个 pull request 下的 changed files 和 patch
-6. 基于 PR patch 创建 AI review job
-7. 调用 OpenRouter 在线模型生成结构化 review 结果
-8. 保存 review summary 与 findings，并支持按 review job 查询结果
+6. `POST /pull-requests/{id}/review-jobs` 创建 job（`pending`）并入队，返回 `202 Accepted`
+7. Celery worker 后台执行 review（小 PR 单次请求，大 PR chunking）
+8. 调用 OpenRouter 生成结构化 `summary` + `findings` 并落库
+9. 客户端通过 `GET /review-jobs/{id}` 轮询 `pending -> processing -> completed / failed`
+10. Celery Beat 定期回收卡在 `processing` 的僵尸 job
 
 ## 项目路线图
 
@@ -142,7 +145,7 @@ Architeture最终完成的流程：Github -> Webhook -> BackendAPI -> RabbitMQ -
 - 编写一个最小任务（如 `hello` / `add`）
 - 启动 worker 并验证 `delay()` 后任务能够被消费
 
-状态：下一步立即开始
+状态：已完成
 
 #### Phase 7B: Celery 接入 review job 执行逻辑
 
@@ -154,7 +157,7 @@ Architeture最终完成的流程：Github -> Webhook -> BackendAPI -> RabbitMQ -
 - worker 在后台执行 review
 - 结果继续写回 `review_jobs` / `review_findings`
 
-状态：未开始
+状态：已完成
 
 #### Phase 7C: API 改造为异步任务接口
 
@@ -166,7 +169,7 @@ Architeture最终完成的流程：Github -> Webhook -> BackendAPI -> RabbitMQ -
 - API 将任务发送到 RabbitMQ
 - 立即返回 `202 Accepted`
 
-状态：未开始
+状态：已完成
 
 #### Phase 7D: 状态轮询与查询规范
 
@@ -177,33 +180,85 @@ Architeture最终完成的流程：Github -> Webhook -> BackendAPI -> RabbitMQ -
 - 基于 `GET /review-jobs/{id}` 查询状态
 - 为前端轮询和后续展示层打基础
 
-状态：未开始
+状态：已完成
 
 #### Phase 7E: 可靠性与工程化补全
 
 目标：把异步系统从“能跑”升级到“更接近真实工程”。  
 要做的事情：
 
-- 增加任务级重试
-- 增加超时控制
-- 增加日志和错误记录
-- 补充本地 `docker-compose.yml`
+- 增加任务级重试（瞬时 HTTP/网络错误 + 指数退避）
+- 增加超时控制（soft/hard time limit）
+- 增加日志和错误记录（worker 写回 `review_jobs.error_message`）
+- 终态 job 幂等跳过，避免 at-least-once 重复执行
+- Celery Beat 自动回收 stale `processing` jobs
+- 本地 `compose.yaml`：api + worker + beat + rabbitmq
+- task 层失败路径自动化测试（soft timeout / 重试耗尽 / reclaim）
 
-状态：未开始
+状态：已完成
 
-Step 7 总状态：已完成方案设计，准备进入 Phase 7A
+Step 7 总状态：已完成 Phase 7A - 7E
 
 ### Step 8: Review 展示层
 
 目的：让 review 结果真正可被用户消费。  
 要做的事情：
 
-- 前端展示 repositories / PRs / files
+- 前端 GitHub 登录与 session
+- 展示 repositories / PRs / files
+- 触发 review job，并轮询 `pending / processing / completed / failed`
 - 展示 review findings
 - 按文件和严重级别过滤
 - 提供类似 GitHub review 的阅读体验
 
+建议按以下 4 个阶段推进：
+
+#### Phase 8A: 前端基础与登录
+
+目标：先让浏览器能安全地调用后端。  
+要做的事情：
+
+- 后端补 CORS，允许 `frontend_url`
+- 打通 GitHub OAuth 回跳到前端并保存 access token
+- 建立 API client（axios + TanStack Query）
+- 登录页 / 当前用户信息
+
 状态：未开始
+
+#### Phase 8B: Repo / PR 浏览
+
+目标：用户能看到自己的仓库和 PR，而不必每次只靠 curl sync。  
+要做的事情：
+
+- 后端补 `GET` 列表接口（当前只有 sync `POST`）
+- 前端仓库列表、PR 列表
+- 手动 sync 按钮（复用现有 sync API）
+
+状态：未开始
+
+#### Phase 8C: 异步 Review 触发与状态
+
+目标：在 UI 里走完 `202 + 轮询` 这条已存在的后端契约。  
+要做的事情：
+
+- 在 PR 详情触发 review job
+- 轮询 job 状态
+- 展示 `pending / processing / completed / failed` 和 `error_message`
+
+状态：未开始
+
+#### Phase 8D: Findings 阅读体验
+
+目标：让结构化结果真正可消费。  
+要做的事情：
+
+- 展示 `result_summary` 与 findings 列表
+- 按 `file_path`、`severity` 过滤
+- 定位到文件和行号（接近 GitHub review 的阅读方式）
+
+状态：未开始
+
+Step 8 总状态：未开始
 
 ### Step 9: 自动化触发
 
@@ -252,10 +307,21 @@ Step 7 总状态：已完成方案设计，准备进入 Phase 7A
 - findings 落库与去重
 - chunk 模式失败重试与部分成功保留
 - `GET /review-jobs/{id}` 查询接口
+- RabbitMQ + Celery 最小消息流
+- Celery worker 后台执行 `execute_review_job()`
+- `POST /pull-requests/{id}/review-jobs` 异步化为 `202 Accepted`
+- `GET /pull-requests/{id}/review-jobs` 历史任务列表接口
+- Celery task 级重试（瞬时错误 + 指数退避）
+- Celery soft/hard time limit，超时写回 `failed`
+- worker 层错误写回 `review_jobs.error_message`
+- 终态 job 幂等跳过
+- Celery Beat 自动回收 stale `processing` jobs
+- 本地 compose：api + worker + beat + rabbitmq
+- task 层失败路径自动化测试
 
-当前已经具备一个最小可运行的结构化 AI review 输入、执行与查询链路。
+当前已经具备一个可联调的结构化 AI review 异步闭环：提交、后台执行、查询、失败写回、僵尸回收。
 
-从路线图角度看，当前已经完成 Step 1 到 Step 6 的基础版本，下一步进入 Step 7。
+从路线图角度看，当前已经完成 Step 1 到 Step 7E，下一步进入 Step 8。
 
 ## 当前核心数据模型
 
@@ -272,21 +338,23 @@ Step 7 总状态：已完成方案设计，准备进入 Phase 7A
 
 ## 下一步计划
 
-下一阶段建议优先完成：
+下一阶段进入 Step 8，按优先级推进：
 
-1. 完成 Step 7A：RabbitMQ + Celery 最小消息流
-2. 完成 Step 7B：让 worker 后台执行 `execute_review_job()`
-3. 完成 Step 7C：把 review job 创建接口改成 `202 Accepted`
-4. 完成 Step 7D：基于 `GET /review-jobs/{id}` 建立轮询语义
-5. 完成 Step 7E：补任务级重试、超时、日志和 Compose
+1. Phase 8A：CORS + OAuth 回跳前端 + API client + 登录态
+2. Phase 8B：补后端 GET 列表接口，前端展示 repositories / PRs
+3. Phase 8C：触发 review job 并轮询状态
+4. Phase 8D：findings 展示、按文件和严重级别过滤
+5. 后续再做 Step 9 Webhook 自动化，以及 Step 10 部署与监控
+
+chunk 模式的更系统化集成测试可以在 Step 8 并行补，但不阻塞展示层开工。
 
 ## 项目状态
 
-当前项目已完成 GitHub 集成与结构化 AI review 的主干骨架，已经具备进入异步任务系统的前置条件。当前正准备开始 Step 7A：先打通 RabbitMQ 与 Celery 的最小消息流，再逐步接入 review job 执行链路。
+当前项目已完成 GitHub 集成、结构化 AI review 和异步任务系统的工程化闭环。已具备 review job 的异步提交、后台执行、状态查询、任务级重试/超时、错误写回、Beat 僵尸回收，以及本地 compose 联调环境。下一步是 Step 8：把这些能力做成可被用户使用的前端。
 
 ## 当前阶段测试计划
 
-当前阶段的目标不是继续扩功能，而是先验证结构化 review 链路在不同输入规模下是否稳定。
+Step 7E 的 task 层失败路径已经用自动化测试锁住。展示层开工后，仍建议补完结构化 review 在不同输入规模下的稳定性测试。
 
 已完成验证：
 
@@ -294,8 +362,12 @@ Step 7 总状态：已完成方案设计，准备进入 Phase 7A
 - `summary` 与 `findings` 可成功解析
 - `summary` 与 `findings` 可成功写入数据库
 - `review_jobs` 接口能够返回结构化结果
+- compose 可启动 api / worker / beat / rabbitmq
+- task 层 soft timeout 会写回 `failed`
+- task 层瞬时错误重试耗尽会写回 `failed`
+- Beat reclaim task 会调用回收逻辑
 
-接下来计划补完的测试：
+仍建议补完的测试：
 
 1. 小 PR 成功路径测试
    - 条件：改动总量小于 1000 行，且文件数不超过 30
@@ -332,4 +404,101 @@ Step 7 总状态：已完成方案设计，准备进入 Phase 7A
    - 预期：重复 findings 会被去重
    - 预期：chunk 模式下缺失的 `file_path` 会被 fallback 补齐
 
-完成以上测试后，就可以进入下一步：正式开始 Step 7A，先验证 RabbitMQ + Celery 的最小任务链路，再逐步把 review job 接入后台执行。
+这些测试不阻塞 Step 8。展示层可以先消费已稳定的小 PR 成功路径。
+
+
+
+
+Test command
+
+联调整套后端（推荐）：
+```
+cd backend
+docker compose up -d --build
+```
+
+开发迭代 API 时，可只起队列相关进程，本机热重载：
+```
+docker compose up -d rabbitmq worker beat
+source venv/bin/activate
+uvicorn app.main:app --reload
+```
+
+跑 7E task 层测试：
+```
+cd backend
+source venv/bin/activate
+pytest -q
+```
+
+source into environment: 
+```
+source venv/bin/activate
+```
+
+start backend (without compose api): 
+```
+uvicorn app.main:app --reload
+```
+
+start rabbitmq: 
+```
+docker compose up -d rabbitmq
+```
+
+start celery worker: 
+```
+celery -A app.core.celery_app:celery_app worker -l INFO
+```
+
+start celery beat: 
+```
+celery -A app.core.celery_app:celery_app beat -l INFO --schedule=/tmp/celerybeat-schedule
+```
+
+verify current user: 
+```
+curl http://127.0.0.1:8000/auth/me \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+sync REPO:
+```
+curl -X POST http://127.0.0.1:8000/repositories/sync \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+sync PR for [REPO_ID]:
+```
+curl -X POST http://127.0.0.1:8000/repositories/REPO_ID/pr/sync \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+sync PR files for [PR_ID]:
+```
+curl -X POST http://127.0.0.1:8000/pull-requests/PR_ID/files/sync \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+create review job:
+```
+curl -X POST http://127.0.0.1:8000/pull-requests/PR_ID/review-jobs \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "provider": "openrouter",
+    "model_name": "openrouter/free"
+  }'
+```
+
+verify all review jobs for [PR_ID]:
+```
+curl "http://127.0.0.1:8000/pull-requests/3/review-jobs" \
+  -H "Authorization: Bearer <token>"
+```
+
+polling status of single review job:
+```
+curl "http://127.0.0.1:8000/review-jobs/<job_id>" \
+  -H "Authorization: Bearer <token>"
+```
