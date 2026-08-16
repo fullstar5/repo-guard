@@ -1,4 +1,7 @@
+import logging
+
 from celery import Celery  # pyright: ignore[reportMissingImports]
+from celery.signals import setup_logging  # pyright: ignore[reportMissingImports]
 
 from app.core.config import get_settings
 
@@ -37,3 +40,11 @@ celery_app.conf.update(
 )
 
 
+@setup_logging.connect
+def configure_celery_logging(**_kwargs) -> None:
+    """Keep worker/beat logs grep-friendly in production."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+        force=True,
+    )
