@@ -2,7 +2,7 @@ from secrets import token_urlsafe
 
 import httpx
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -42,7 +42,7 @@ async def github_login() -> RedirectResponse:
     return response
 
 
-@router.get("/github/callback", response_model=GitHubOAuthCallbackResponse)
+@router.get("/github/callback")
 async def github_callback(
     code: str,
     state: str,
@@ -55,23 +55,53 @@ async def github_callback(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid OAuth state",
         )
-
     http_client: httpx.AsyncClient = request.app.state.http_client
-
     token_response = await exchange_code_for_access_token(http_client, code)
     github_user = await fetch_github_user(http_client, token_response.access_token)
     primary_email = await fetch_primary_email(http_client, token_response.access_token)
-
     user = await upsert_github_user(
         db=db,
         github_user=github_user,
         token_data=token_response,
         email=primary_email,
     )
-
-    return build_auth_response(user)
+    auth = build_auth_response(user)
+    response = RedirectResponse(
+        url=settings.frontend_url,
+        status_code=status.HTTP_302_FOUND,
+    )
+    response.set_cookie(
+        key=settings.access_token_cookie_name,
+        value=auth.access_token,
+        max_age=settings.access_token_expire_minutes * 60,
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite="lax",
+        path="/",
+    )
+    response.delete_cookie(
+        key=settings.oauth_state_cookie_name,
+        path="/",
+    )
+    return response
 
 
 @router.get("/me", response_model=AuthUserRead)
 async def get_me(current_user: User = Depends(get_current_user)):
     return AuthUserRead.model_validate(current_user)
+
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout():
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
+    # Cookie deletion must match the attributes used in set_cookie,
+    # otherwise browsers keep the httpOnly session cookie.
+    response.delete_cookie(
+        key=settings.access_token_cookie_name,
+        path="/",
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite="lax",
+    )
+    return response

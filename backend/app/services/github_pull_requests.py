@@ -97,3 +97,31 @@ async def sync_pull_requests(
         await db.refresh(pull_request)
 
     return synced_items
+
+
+
+async def get_repo_for_user(
+    db: AsyncSession,
+    repository_id: int,
+    user_id: int,
+) -> Repository | None:
+    result = await db.execute(
+        select(Repository).where(
+            Repository.id == repository_id,
+            Repository.user_id == user_id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+
+async def list_PRs_for_repo(
+    db: AsyncSession,
+    repository_id: int,
+) -> list[PullRequest]:
+    result = await db.execute(
+        select(PullRequest)
+        .where(PullRequest.repository_id == repository_id)
+        .order_by(PullRequest.github_updated_at.desc())
+    )
+    return list(result.scalars().all())

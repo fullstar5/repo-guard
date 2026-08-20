@@ -103,3 +103,16 @@ async def get_pull_request_with_repository(
 
     pull_request, repository = row
     return pull_request, repository
+
+
+
+async def list_PR_files(
+    db: AsyncSession,
+    pull_request_id: int,
+) -> list[PRFile]:
+    result = await db.execute(
+        select(PRFile)
+        .where(PRFile.pull_request_id == pull_request_id)
+        .order_by(PRFile.filename.asc())
+    )
+    return list(result.scalars().all())

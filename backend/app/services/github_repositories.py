@@ -70,3 +70,17 @@ async def sync_repositories(
         await db.refresh(repo)
 
     return synced_items
+
+
+
+async def list_repos_for_user(
+    db: AsyncSession,
+    user_id: int,
+) -> list[Repository]:
+    """Return synced repos for user"""
+    result = await db.execute(
+        select(Repository).where(Repository.user_id == user_id)
+        .order_by(Repository.updated_at.desc())
+    )
+
+    return list(result.scalars().all())

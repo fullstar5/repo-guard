@@ -1,13 +1,16 @@
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db
-from app.models.repository import Repository
 from app.models.user import User
 from app.schemas.pull_request import PullRequestRead, PullRequestSyncResponse
-from app.services.github_pull_requests import fetch_github_pull_requests, sync_pull_requests
+from app.services.github_pull_requests import (
+    fetch_github_pull_requests,
+    get_repo_for_user,
+    list_PRs_for_repo,
+    sync_pull_requests,
+)
 
 
 router = APIRouter(prefix="/repositories", tags=["pull-requests"])
@@ -26,13 +29,12 @@ async def sync_repo_pr(
             detail="User has no GitHub access token",
         )
     
-    result = await db.execute(
-        select(Repository).where(
-            Repository.id == repository_id,
-            Repository.user_id == current_user.id,
-        )
+    
+    repository = await get_repo_for_user(
+        db=db,
+        repository_id=repository_id,
+        user_id=current_user.id,
     )
-    repository = result.scalar_one_or_none()
 
     if repository is None:
         raise HTTPException(
@@ -54,6 +56,31 @@ async def sync_repo_pr(
         github_pull_requests=github_pull_requests,
     )
 
+    return PullRequestSyncResponse(
+        count=len(pull_requests),
+        items=[PullRequestRead.model_validate(item) for item in pull_requests],
+    )
+
+
+
+
+@router.get("/{repository_id}/pull-requests", response_model=PullRequestSyncResponse)
+async def list_repository_pull_requests(
+    repository_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    repository = await get_repo_for_user(
+        db=db,
+        repository_id=repository_id,
+        user_id=current_user.id,
+    )
+    if repository is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Repository not found",
+        )
+    pull_requests = await list_PRs_for_repo(db, repository_id)
     return PullRequestSyncResponse(
         count=len(pull_requests),
         items=[PullRequestRead.model_validate(item) for item in pull_requests],
