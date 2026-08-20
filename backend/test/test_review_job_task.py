@@ -1,8 +1,8 @@
 from unittest.mock import AsyncMock, patch
 
-import httpx
-import pytest
-from billiard.exceptions import SoftTimeLimitExceeded
+import httpx  # pyright: ignore[reportMissingImports]
+import pytest  # pyright: ignore[reportMissingImports]
+from billiard.exceptions import SoftTimeLimitExceeded  # pyright: ignore[reportMissingImports]
 
 from app.tasks.review_jobs import execute_review_job_task, mark_abandoned_jobs
 

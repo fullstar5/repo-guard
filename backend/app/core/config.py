@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     github_oauth_scope: str
     oauth_state_cookie_name: str
     cookie_secure: bool
+    access_token_cookie_name: str = "codeguard_access_token"
 
     jwt_secret_key: str
     jwt_algorithm: str
