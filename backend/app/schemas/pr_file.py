@@ -22,3 +22,21 @@ class PullRequestFileRead(BaseModel):
 class PullRequestFileSyncResponse(BaseModel):
     count: int
     items: list[PullRequestFileRead]
+
+
+
+class PullRequestFileListItem(BaseModel):
+    id: int
+    filename: str
+    previous_filename: str | None = None
+    status: str
+    additions: int
+    deletions: int
+    changes: int
+    
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PullRequestFileListResponse(BaseModel):
+    count: int
+    items: list[PullRequestFileListItem]

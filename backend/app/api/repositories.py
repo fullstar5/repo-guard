@@ -5,7 +5,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user, get_db
 from app.models.user import User
 from app.schemas.repository import RepositoryRead, RepositorySyncResponse
-from app.services.github_repositories import fetch_github_repositories, sync_repositories
+from app.services.github_repositories import (
+    fetch_github_repositories,
+    list_repos_for_user,
+    sync_repositories,
+)
 
 
 router = APIRouter(prefix="/repositories", tags=["repositories"])
@@ -34,4 +38,17 @@ async def sync_user_repositories(
     return RepositorySyncResponse(
         count=len(repositories),
         items=[RepositoryRead.model_validate(item) for item in repositories]
+    )
+
+
+
+@router.get("", response_model=RepositorySyncResponse)
+async def list_user_repos(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    repos = await list_repos_for_user(db, current_user.id)
+    return RepositorySyncResponse(
+        count=len(repos),
+        items=[RepositoryRead.model_validate(item) for item in repos],
     )
