@@ -62,7 +62,7 @@ export default function PullRequestReviewPage() {
     enabled: meQuery.isSuccess && idsReady,
     refetchInterval: (query) => {
       const jobs = query.state.data ?? [];
-      return jobs.some(isActiveJob) ? 2000 : false;
+      return jobs.some(isActiveJob) ? 60000 : false;
     },
   });
 
@@ -162,15 +162,63 @@ export default function PullRequestReviewPage() {
         </div>
       </section>
 
-      {fileCount === 0 && (
-        <p className="text-sm text-zinc-500">
-          No files synced yet. Sync files before running a review.
-        </p>
-      )}
-
       {createJobMutation.isError && (
         <p className="text-sm text-red-600">Failed to enqueue review job.</p>
       )}
+
+      <section>
+        <h3 className="mb-3 text-base font-medium">
+          Changed files{fileCount > 0 ? ` (${fileCount})` : ""}
+        </h3>
+        {filesQuery.isLoading ? (
+          <p className="text-sm text-zinc-500">Loading files...</p>
+        ) : filesQuery.isError ? (
+          <p className="text-sm text-red-600">Failed to load files.</p>
+        ) : filesQuery.data?.length === 0 ? (
+          <p className="text-sm text-zinc-500">
+            No files synced yet. Sync files before running a review.
+          </p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>File</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Additions</TableHead>
+                <TableHead>Deletions</TableHead>
+                <TableHead>Changes</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filesQuery.data?.map((file) => (
+                <TableRow key={file.id}>
+                  <TableCell>
+                    <Link
+                      href={`/repositories/${repositoryId}/pull-requests/${pullRequestId}/files/${file.id}`}
+                      className="font-medium hover:underline"
+                    >
+                      {file.filename}
+                    </Link>
+                    {file.previous_filename && (
+                      <div className="text-xs text-zinc-500">
+                        renamed from {file.previous_filename}
+                      </div>
+                    )}
+                  </TableCell>
+                  <TableCell>{file.status}</TableCell>
+                  <TableCell className="text-emerald-600">
+                    +{file.additions}
+                  </TableCell>
+                  <TableCell className="text-red-600">
+                    -{file.deletions}
+                  </TableCell>
+                  <TableCell>{file.changes}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </section>
 
       <section>
         <h3 className="mb-3 text-base font-medium">Review jobs</h3>

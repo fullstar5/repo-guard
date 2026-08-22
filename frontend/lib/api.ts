@@ -1,5 +1,4 @@
 import axios from "axios";
-import { AwardIcon } from "lucide-react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
 
@@ -64,9 +63,15 @@ export type PullRequestFile = {
     filename: string;
     previous_filename: string | null;
     status: string;
-    addition: number;
-    deletion: number;
+    additions: number;
+    deletions: number;
     changes: number;
+};
+
+export type PullRequestFileDetail = PullRequestFile & {
+    sha: string | null;
+    blob_url: string | null;
+    patch: string | null;
 };
 
 
@@ -129,16 +134,26 @@ export async function getPullRequest(pullRequestId: number): Promise<PullRequest
     return response.data;
 }
 
+export async function getPullRequestFile(
+    pullRequestId: number,
+    fileId: number,
+): Promise<PullRequestFileDetail> {
+    const response = await api.get<PullRequestFileDetail>(
+        `/pull-requests/${pullRequestId}/files/${fileId}`,
+    );
+    return response.data;
+}
+
 export async function listPullRequestFiles(pullRequestId: number): Promise<PullRequestFile[]> {
-    const resposne = await api.post<ListResponse<PullRequestFile>>(
+    const response = await api.get<ListResponse<PullRequestFile>>(
         `/pull-requests/${pullRequestId}/files`,
     );
-    return resposne.data.items;
+    return response.data.items;
 }
 
 export async function syncPullRequestFiles(pullRequestId: number): Promise<PullRequestFile[]> {
     const response = await api.post<ListResponse<PullRequestFile>>(
-        `pull-requests/${pullRequestId}/files/sync`,
+        `/pull-requests/${pullRequestId}/files/sync`,
     );
     return response.data.items;
 }
@@ -153,7 +168,7 @@ export async function listReviewJobs(pullRequestId: number): Promise<ReviewJob[]
 
 export async function createReviewJob(pullRequestId: number): Promise<ReviewJob> {
     const response = await api.post<ReviewJob>(
-        `pull-requests/${pullRequestId}/review-jobs`,
+        `/pull-requests/${pullRequestId}/review-jobs`,
         {
             provider: "openrouter",
             model_name: "openrouter/free",

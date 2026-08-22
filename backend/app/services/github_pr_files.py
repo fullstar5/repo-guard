@@ -116,3 +116,22 @@ async def list_PR_files(
         .order_by(PRFile.filename.asc())
     )
     return list(result.scalars().all())
+
+
+async def get_PR_file_for_user(
+    db: AsyncSession,
+    pull_request_id: int,
+    file_id: int,
+    user_id: int,
+) -> PRFile | None:
+    result = await db.execute(
+        select(PRFile)
+        .join(PullRequest, PRFile.pull_request_id == PullRequest.id)
+        .join(Repository, PullRequest.repository_id == Repository.id)
+        .where(
+            PRFile.id == file_id,
+            PRFile.pull_request_id == pull_request_id,
+            Repository.user_id == user_id,
+        )
+    )
+    return result.scalar_one_or_none()

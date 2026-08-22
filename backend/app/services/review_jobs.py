@@ -1,6 +1,8 @@
-import httpx  # pyright: ignore[reportMissingImports]
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
+
+import httpx  # pyright: ignore[reportMissingImports]
 
 from sqlalchemy import select, delete  # pyright: ignore[reportMissingImports]
 from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
@@ -117,7 +119,12 @@ async def _review_content_with_retries(
 
     for attempt in range(1, attempt_count + 1):
         try:
-            return await provider.review_content(content)
+            # httpx read timeout only applies per socket read. A slow model can
+            # keep the connection alive for many minutes. Cap each attempt.
+            return await asyncio.wait_for(
+                provider.review_content(content),
+                timeout=settings.openrouter_read_timeout,
+            )
         except Exception as exc:
             last_exc = exc
             logger.warning(

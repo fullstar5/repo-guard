@@ -13,9 +13,10 @@ from app.schemas.pr_file import (
 )
 from app.services.github_pr_files import (
     fetch_github_pull_request_files,
+    get_PR_file_for_user,
     get_pull_request_with_repository,
+    list_PR_files,
     sync_pull_request_files,
-    list_PR_files
 )
 
 
@@ -95,6 +96,31 @@ async def list_PR_files_endpoint(
         count=len(files),
         items=[PullRequestFileListItem.model_validate(item) for item in files],
     )
+
+
+@router.get(
+    "/{pull_request_id}/files/{file_id}",
+    response_model=PullRequestFileRead,
+)
+async def get_PR_file(
+    pull_request_id: int,
+    file_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return one synced file including its patch, scoped to the current user."""
+    pr_file = await get_PR_file_for_user(
+        db=db,
+        pull_request_id=pull_request_id,
+        file_id=file_id,
+        user_id=current_user.id,
+    )
+    if pr_file is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Pull request file not found",
+        )
+    return PullRequestFileRead.model_validate(pr_file)
 
 
 
