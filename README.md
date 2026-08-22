@@ -19,7 +19,7 @@ CodeGuard AI 是一个面向开发者的 AI Code Review SaaS 项目。它的目�
 
 当前已采用或已规划的主要技术：
 
-- Frontend: Next.js, React, TypeScript, Tailwind CSS, shadcn/ui， TanStack Query, React Hook Form, Zod
+- Frontend: Next.js, React, TypeScript, Tailwind CSS, shadcn/ui, TanStack Query, axios, React Hook Form, Zod
 - Backend: FastAPI, SQLAlchemy 2, Pydantic, Alembic, httpx
 - Database: Neon PostgreSQL
 - Cache: Upstash Redis
@@ -29,22 +29,32 @@ CodeGuard AI 是一个面向开发者的 AI Code Review SaaS 项目。它的目�
 - Local Orchestration: Docker Compose（api + worker + beat + rabbitmq）
 - CI/CD: Github Actions
 
-Architeture最终完成的流程：Github -> Webhook -> BackendAPI -> RabbitMQ -> Celery -> OpenRouter -> Postgres -> Frontend
+Architecture 最终完成的流程：Github -> Webhook -> BackendAPI -> RabbitMQ -> Celery -> OpenRouter -> Postgres -> Frontend
+
+### 前端技术落地
+
+README 原定前端栈与当前使用情况：
+
+- 已使用：Next.js, React, TypeScript, Tailwind CSS, shadcn/ui（Button / Table）, TanStack Query, axios
+- 已安装但未在业务代码中使用：React Hook Form, Zod, lucide-react, Card
+- 计划用法：React Hook Form + Zod 用于 8C 触发 review 的可选参数校验；lucide-react / Card 用于 8C/8D 的状态与 findings 展示
 
 ## 当前系统流程
 
-目前后端已经打通的主流程如下：
+目前已经打通的主流程如下：
 
-1. 用户通过 GitHub 登录
+1. 用户在前端通过 GitHub 登录（httpOnly cookie session）
 2. 后端保存用户信息和访问凭证
-3. 同步用户可访问的 repositories
-4. 同步某个 repository 下的 pull requests
-5. 同步某个 pull request 下的 changed files 和 patch
+3. 前端展示已同步 repositories，并支持手动 sync
+4. 前端展示某个 repository 下的 pull requests，并支持手动 sync
+5. 后端可同步某个 pull request 下的 changed files 和 patch
 6. `POST /pull-requests/{id}/review-jobs` 创建 job（`pending`）并入队，返回 `202 Accepted`
 7. Celery worker 后台执行 review（小 PR 单次请求，大 PR chunking）
 8. 调用 OpenRouter 生成结构化 `summary` + `findings` 并落库
 9. 客户端通过 `GET /review-jobs/{id}` 轮询 `pending -> processing -> completed / failed`
 10. Celery Beat 定期回收卡在 `processing` 的僵尸 job
+
+第 6–9 步目前仍以后端 API / curl 为主，将在 Step 8C 接到前端。
 
 ## 项目路线图
 
@@ -223,7 +233,7 @@ Step 7 总状态：已完成 Phase 7A - 7E
 - 建立 API client（axios + TanStack Query）
 - 登录页 / 当前用户信息
 
-状态：未开始
+状态：已完成
 
 #### Phase 8B: Repo / PR 浏览
 
@@ -234,7 +244,7 @@ Step 7 总状态：已完成 Phase 7A - 7E
 - 前端仓库列表、PR 列表
 - 手动 sync 按钮（复用现有 sync API）
 
-状态：未开始
+状态：已完成
 
 #### Phase 8C: 异步 Review 触发与状态
 
@@ -258,7 +268,7 @@ Step 7 总状态：已完成 Phase 7A - 7E
 
 状态：未开始
 
-Step 8 总状态：未开始
+Step 8 总状态：已完成 Phase 8A - 8B，下一步进入 Phase 8C
 
 ### Step 9: 自动化触发
 
@@ -318,10 +328,15 @@ Step 8 总状态：未开始
 - Celery Beat 自动回收 stale `processing` jobs
 - 本地 compose：api + worker + beat + rabbitmq
 - task 层失败路径自动化测试
+- 后端 CORS + GitHub OAuth 回跳前端 + httpOnly cookie session
+- 前端登录 / 当前用户 / 登出
+- `GET /repositories`、`GET /repositories/{id}/pull-requests`、`GET /pull-requests/{id}/files`
+- 前端仓库列表与手动 sync
+- 前端 PR 列表与手动 sync
 
-当前已经具备一个可联调的结构化 AI review 异步闭环：提交、后台执行、查询、失败写回、僵尸回收。
+当前已经具备可在浏览器里登录、浏览仓库和 PR 的展示层，以及可联调的结构化 AI review 异步闭环。Review 的触发、轮询和 findings 阅读仍走 API，尚未接到 UI。
 
-从路线图角度看，当前已经完成 Step 1 到 Step 7E，下一步进入 Step 8。
+从路线图角度看，当前已经完成 Step 1 到 Step 8B，下一步进入 Step 8C。
 
 ## 当前核心数据模型
 
@@ -338,19 +353,17 @@ Step 8 总状态：未开始
 
 ## 下一步计划
 
-下一阶段进入 Step 8，按优先级推进：
+下一阶段进入 Step 8C，按优先级推进：
 
-1. Phase 8A：CORS + OAuth 回跳前端 + API client + 登录态
-2. Phase 8B：补后端 GET 列表接口，前端展示 repositories / PRs
-3. Phase 8C：触发 review job 并轮询状态
-4. Phase 8D：findings 展示、按文件和严重级别过滤
-5. 后续再做 Step 9 Webhook 自动化，以及 Step 10 部署与监控
+1. Phase 8C：PR 详情触发 review job，并轮询 `pending / processing / completed / failed`
+2. Phase 8D：findings 展示、按文件和严重级别过滤
+3. 后续再做 Step 9 Webhook 自动化，以及 Step 10 部署与监控
 
-chunk 模式的更系统化集成测试可以在 Step 8 并行补，但不阻塞展示层开工。
+chunk 模式的更系统化集成测试可以在 Step 8 并行补，但不阻塞展示层。
 
 ## 项目状态
 
-当前项目已完成 GitHub 集成、结构化 AI review 和异步任务系统的工程化闭环。已具备 review job 的异步提交、后台执行、状态查询、任务级重试/超时、错误写回、Beat 僵尸回收，以及本地 compose 联调环境。下一步是 Step 8：把这些能力做成可被用户使用的前端。
+当前项目已完成 GitHub 集成、结构化 AI review、异步任务系统，以及前端登录和 Repo/PR 浏览。用户可以在浏览器里登录、同步并查看仓库与 PR。下一步是 Step 8C：把已有的 `202 + 轮询` 契约接到 PR 页面。
 
 ## 当前阶段测试计划
 
@@ -366,6 +379,8 @@ Step 7E 的 task 层失败路径已经用自动化测试锁住。展示层开工
 - task 层 soft timeout 会写回 `failed`
 - task 层瞬时错误重试耗尽会写回 `failed`
 - Beat reclaim task 会调用回收逻辑
+- 前端 GitHub 登录 / 登出 / session 保持
+- 前端仓库列表与 PR 列表，刷新走 GET 而不自动 sync GitHub
 
 仍建议补完的测试：
 

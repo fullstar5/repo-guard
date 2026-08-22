@@ -1,9 +1,9 @@
 from datetime import datetime
 
-import httpx
+import httpx  # pyright: ignore[reportMissingImports]
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select  # pyright: ignore[reportMissingImports]
+from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 
 from app.models.pull_request import PullRequest
 from app.models.repository import Repository
@@ -119,6 +119,7 @@ async def list_PRs_for_repo(
     db: AsyncSession,
     repository_id: int,
 ) -> list[PullRequest]:
+    """service that list all PRs based on repo ID"""
     result = await db.execute(
         select(PullRequest)
         .where(PullRequest.repository_id == repository_id)

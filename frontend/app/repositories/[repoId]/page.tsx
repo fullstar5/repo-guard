@@ -128,7 +128,14 @@ export default function RepositoryPullRequestsPage() {
                     #{pr.number}
                   </a>
                 </TableCell>
-                <TableCell>{pr.title}</TableCell>
+                <TableCell>
+                  <Link
+                    href={`/repositories/${repositoryId}/pull-requests/${pr.id}`}
+                    className="hover:underline"
+                  >
+                    {pr.title}
+                  </Link>
+                </TableCell>
                 <TableCell>{pr.is_draft ? "draft" : pr.state}</TableCell>
                 <TableCell>{pr.author_login ?? "-"}</TableCell>
                 <TableCell>
