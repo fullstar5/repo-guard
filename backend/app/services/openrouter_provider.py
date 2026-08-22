@@ -41,7 +41,7 @@ def _extract_json_text(raw_text: str) -> str:
         except json.JSONDecodeError:
             continue
     
-    raise ValueError("Model did not return valid JSON content.")
+    raise ValueError("Model did not return valid JSON content.")   # model returned content but not in valid format
 
 
 

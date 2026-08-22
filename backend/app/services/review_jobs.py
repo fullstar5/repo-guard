@@ -128,7 +128,7 @@ async def _review_content_with_retries(
         except Exception as exc:
             last_exc = exc
             logger.warning(
-                "Review attempt %s %s failed for %s: %s",
+                "Review attempt %s/%s failed for %s: %s",
                 attempt,
                 attempt_count,
                 request_label,
