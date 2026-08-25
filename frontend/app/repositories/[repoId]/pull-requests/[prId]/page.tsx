@@ -1,12 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { isAxiosError } from "axios";
 
 import { AppHeader } from "@/components/app-header";
+import { ReviewFindingsPanel } from "@/components/review-findings";
 import { Button } from "@/components/ui/button";
+import { pickSelectedReviewJob } from "@/lib/review-findings";
 import {
   Table,
   TableBody,
@@ -34,10 +36,12 @@ function isActiveJob(job: ReviewJob): boolean {
 
 export default function PullRequestReviewPage() {
   const params = useParams<{ repoId: string; prId: string }>();
+  const searchParams = useSearchParams();
   const repositoryId = Number(params.repoId);
   const pullRequestId = Number(params.prId);
   const queryClient = useQueryClient();
   const idsReady = Number.isFinite(repositoryId) && Number.isFinite(pullRequestId);
+  const jobIdParam = searchParams.get("jobId");
 
   const meQuery = useQuery({
     queryKey: ["auth", "me"],
@@ -89,6 +93,9 @@ export default function PullRequestReviewPage() {
 
   const hasActiveJob = (jobsQuery.data ?? []).some(isActiveJob);
   const fileCount = filesQuery.data?.length ?? 0;
+  const selectedJob = pickSelectedReviewJob(jobsQuery.data ?? [], jobIdParam);
+  const selectedJobNotFound =
+    jobIdParam != null && jobsQuery.isSuccess && selectedJob == null;
 
   if (meQuery.isLoading) {
     return (
@@ -194,7 +201,9 @@ export default function PullRequestReviewPage() {
                 <TableRow key={file.id}>
                   <TableCell>
                     <Link
-                      href={`/repositories/${repositoryId}/pull-requests/${pullRequestId}/files/${file.id}`}
+                      href={`/repositories/${repositoryId}/pull-requests/${pullRequestId}/files/${file.id}${
+                        selectedJob ? `?jobId=${selectedJob.id}` : ""
+                      }`}
                       className="font-medium hover:underline"
                     >
                       {file.filename}
@@ -237,18 +246,30 @@ export default function PullRequestReviewPage() {
                 <TableHead>ID</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Files / chunks</TableHead>
+                <TableHead>Findings</TableHead>
                 <TableHead>Error</TableHead>
                 <TableHead>Updated</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {jobsQuery.data?.map((job) => (
-                <TableRow key={job.id}>
-                  <TableCell>{job.id}</TableCell>
+                <TableRow
+                  key={job.id}
+                  className={selectedJob?.id === job.id ? "bg-zinc-50" : undefined}
+                >
+                  <TableCell>
+                    <Link
+                      href={`?jobId=${job.id}`}
+                      className="font-medium hover:underline"
+                    >
+                      #{job.id}
+                    </Link>
+                  </TableCell>
                   <TableCell>{job.status}</TableCell>
                   <TableCell>
                     {job.total_files} / {job.total_chunks}
                   </TableCell>
+                  <TableCell>{job.findings.length}</TableCell>
                   <TableCell className="max-w-xs truncate text-red-600">
                     {job.error_message ?? "-"}
                   </TableCell>
@@ -261,6 +282,25 @@ export default function PullRequestReviewPage() {
           </Table>
         )}
       </section>
+
+      {selectedJobNotFound && (
+        <p className="text-sm text-red-600">
+          Review job #{jobIdParam} was not found for this pull request.
+        </p>
+      )}
+
+      {selectedJob && (
+        <section>
+          <h3 className="mb-3 text-base font-medium">Review results</h3>
+          <ReviewFindingsPanel
+            key={selectedJob.id}
+            job={selectedJob}
+            files={filesQuery.data ?? []}
+            repositoryId={repositoryId}
+            pullRequestId={pullRequestId}
+          />
+        </section>
+      )}
     </main>
   );
 }

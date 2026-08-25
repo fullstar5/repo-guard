@@ -35,9 +35,9 @@ Architecture 最终完成的流程：Github -> Webhook -> BackendAPI -> RabbitMQ
 
 README 原定前端栈与当前使用情况：
 
-- 已使用：Next.js, React, TypeScript, Tailwind CSS, shadcn/ui（Button / Table）, TanStack Query, axios
-- 已安装但未在业务代码中使用：React Hook Form, Zod, lucide-react, Card
-- 计划用法：React Hook Form + Zod 用于 8C 触发 review 的可选参数校验；lucide-react / Card 用于 8C/8D 的状态与 findings 展示
+- 已使用：Next.js, React, TypeScript, Tailwind CSS, shadcn/ui（Button / Table / Card）, TanStack Query, axios
+- 已安装但未在业务代码中使用：React Hook Form, Zod, lucide-react
+- 未使用原因：8C 触发 review 目前是单按钮，尚未做模型选择表单；lucide-react 预留给后续 UI polish（Step 11）
 
 ## 当前系统流程
 
@@ -51,14 +51,13 @@ README 原定前端栈与当前使用情况：
 6. `POST /pull-requests/{id}/review-jobs` 创建 job（`pending`）并入队，返回 `202 Accepted`
 7. Celery worker 后台执行 review（小 PR 单次请求，大 PR chunking）
 8. 调用 OpenRouter 生成结构化 `summary` + `findings` 并落库
-9. 客户端通过 `GET /review-jobs/{id}` 轮询 `pending -> processing -> completed / failed`
-10. Celery Beat 定期回收卡在 `processing` 的僵尸 job
-
-第 6–9 步目前仍以后端 API / curl 为主，将在 Step 8C 接到前端。
+9. 前端 PR 详情触发 review，并以 TanStack Query 轮询 `pending -> processing -> completed / failed`
+10. 前端展示 `result_summary` 与 findings，可按文件 / 严重级别过滤，并跳到对应 diff 行号
+11. Celery Beat 定期回收卡在 `processing` 的僵尸 job
 
 ## 项目路线图
 
-整个项目可以分为 10 个主要步骤。每一步都对应一个明确的工程目标，而不是为了堆技术而堆技术。
+整个项目可以分为 11 个主要步骤。每一步都对应一个明确的工程目标，而不是为了堆技术而堆技术。Step 1–8 已完成功能闭环；Step 9–10 是自动化与部署；Step 11 是对已完成步骤的产品化补强，不阻塞 Step 9。
 
 ### Step 1: 项目初始化
 
@@ -255,7 +254,7 @@ Step 7 总状态：已完成 Phase 7A - 7E
 - 轮询 job 状态
 - 展示 `pending / processing / completed / failed` 和 `error_message`
 
-状态：未开始
+状态：已完成
 
 #### Phase 8D: Findings 阅读体验
 
@@ -266,9 +265,9 @@ Step 7 总状态：已完成 Phase 7A - 7E
 - 按 `file_path`、`severity` 过滤
 - 定位到文件和行号（接近 GitHub review 的阅读方式）
 
-状态：未开始
+状态：已完成（MVP：点 job 查看 findings，点 finding 进入文件 diff 并滚到行号。左右分栏、行内发评论等产品深度见 Step 11）
 
-Step 8 总状态：已完成 Phase 8A - 8B，下一步进入 Phase 8C
+Step 8 总状态：已完成 Phase 8A - 8D。展示层功能闭环已通，视觉与安全工程化补强见 Step 11。
 
 ### Step 9: 自动化触发
 
@@ -294,6 +293,44 @@ Step 8 总状态：已完成 Phase 8A - 8B，下一步进入 Phase 8C
 - CI/CD 与部署流水线
 
 状态：未开始
+
+### Step 11: 产品化补强（不阻塞 Step 9）
+
+目的：在 Step 8 功能闭环已经可用的前提下，把安全、体验、测试和模型质量补到更接近工业产品。每一条都标明在优化哪一步的哪一点。  
+状态：未开始
+
+#### 安全与鉴权
+
+- [ ] **IDOR 自动化测试** — 针对 Step 8 读接口的对象级隔离：用户 B 读取用户 A 的 `GET /review-jobs/{id}`、`GET /pull-requests/{id}/files/{fileId}` 必须 404。当前 join `Repository.user_id` 已经写了，但没有测试锁住。
+- [ ] **读路径复检 GitHub 权限** — 针对 Step 3「同步仓库 / PR / files」和 Step 8 的 GET：租户模型目前是「谁 sync 进库」，不是 GitHub ACL。协作者被移出仓库后，库里的 patch / findings 仍可读。
+- [ ] **GitHub token 落库加密** — 针对 Step 3「用户落库 / 访问凭证」：`users` 表现在明文存 GitHub access token。
+- [ ] **队列与 worker 隔离** — 针对 Step 7B/7C：Celery 按 `review_job_id` 执行和标失败，不校验 user。RabbitMQ 必须保持内网；暴露队列等于可触发任意 review。
+- [ ] **Cookie session 加固清单** — 针对 Step 8A「httpOnly cookie session」：核对 SameSite / CSRF、CSP；补按对象的速率限制和审计日志。
+- [ ] **资源 ID 策略** — 针对 Step 8D 的 `?jobId=` / `/files/{id}` 以及 Step 3 的自增主键：跨用户已 404，同一账号仍可枚举自己的整数 id。多租户或分享链接前再评估。
+
+#### UI / UX
+
+- [ ] **信息层级与导航** — 针对 Step 8 整体展示层：PR 标题、分支、review 状态应一眼能扫，而不是先翻表。
+- [ ] **Job 选中态** — 针对 Step 8C「在 PR 详情展示 job 状态」：当前靠点 `#id` 选中，不够明显。
+- [ ] **Findings 与 diff 同屏** — 针对 Step 8D「接近 GitHub review 的阅读方式」：现在要跳到另一页才能看行内评论；可做左右分栏或文件页内嵌列表。
+- [ ] **空状态 / 加载 / 密度** — 针对 Step 8B/8C/8D 的列表页：补骨架屏、空状态、失败重试、暗色与基本移动端。
+- [ ] **视觉风格** — 针对 Step 8 展示层：目前是 shadcn 默认件 + 表格，没有品牌和设计 token。可用已安装的 lucide-react 补图标。
+
+#### 可靠性、模型与测试
+
+- [ ] **OpenRouter 空内容 / 非 JSON** — 针对 Step 5「接入 OpenRouter」和 Step 6「结构化输出解析」：免费/路由模型会返回 `content: null` 或 `User Safety: safe`，靠重试才成功。可换具体 chat 模型、加强日志、按模型可选 `response_format`。
+- [ ] **单次生成墙钟超时** — 针对 Step 7E「超时控制」：httpx `read` 只限制两次 socket 读的间隔；已用 `asyncio.wait_for` 兜底，需保证 **rebuild worker** 后生效。
+- [ ] **前端轮询间隔** — 针对 Step 8C「轮询 job 状态」：当前 `refetchInterval = 60000`，pending/processing 体感偏慢。可缩短，或后续改 SSE/WebSocket。
+- [ ] **Chunk 路径集成测试** — 针对 Step 6 findings 落库/去重 和 Step 7B worker 执行：大 PR、部分成功、全部失败、路径 fallback 仍主要靠手工。不阻塞 Step 9，但应补进自动化。
+- [ ] **展示层自动化** — 针对 Step 8C/8D：触发 review、选中 job、过滤 findings、无效 `jobId` 显示 not found，目前只有手工步骤。
+- [ ] **Worker 非 root 运行** — 针对 Step 7E 本地 compose 和 Step 10「Worker 部署方案」：当前 Celery worker 以 root 跑，有 SecurityWarning。
+- [ ] **Redis `/health` 在受限网络下失败** — 针对 Step 2「`/health` 健康检查」：校园网等环境 DNS 拦 `upstash.io` 时健康检查失败；review 主路径并不走 Redis。
+
+#### 产品边界（与 Step 9 的交界，但不替代 webhook）
+
+- [ ] **模型选择表单** — 针对 Step 8C 触发 review：单按钮写死 `openrouter/free`。若要可选模型，再用已安装的 React Hook Form + Zod。
+- [ ] **组织 / 多成员** — 针对 Step 3 的「一用户镜像自己的 GitHub」模型：没有 org、没有分享仓库。
+- [ ] **评论写回 GitHub** — 仍属 Step 9「后续可支持自动评论回 GitHub」，不在 Step 8 范围；此处仅作提醒，避免和展示层 polish 混在一起。
 
 ## 当前进度
 
@@ -330,13 +367,17 @@ Step 8 总状态：已完成 Phase 8A - 8B，下一步进入 Phase 8C
 - task 层失败路径自动化测试
 - 后端 CORS + GitHub OAuth 回跳前端 + httpOnly cookie session
 - 前端登录 / 当前用户 / 登出
-- `GET /repositories`、`GET /repositories/{id}/pull-requests`、`GET /pull-requests/{id}/files`
+- `GET /repositories`、`GET /repositories/{id}/pull-requests`、`GET /pull-requests/{id}`、`GET /pull-requests/{id}/files`、`GET /pull-requests/{id}/files/{fileId}`
 - 前端仓库列表与手动 sync
 - 前端 PR 列表与手动 sync
+- 前端 PR 详情：Sync files、Run AI review、轮询 job 状态与 `error_message`
+- 前端按 job 展示 `result_summary` / findings，支持 severity 与 file 过滤
+- 前端文件 diff（行号 + 按 finding 高亮），无效 `jobId` 显示 not found 而不改用其他 job
+- Review job / PR file 读接口按 `Repository.user_id` 做对象级隔离（缺 IDOR 自动化测试，见 Step 11）
 
-当前已经具备可在浏览器里登录、浏览仓库和 PR 的展示层，以及可联调的结构化 AI review 异步闭环。Review 的触发、轮询和 findings 阅读仍走 API，尚未接到 UI。
+当前已经具备可在浏览器里登录、同步仓库与 PR、触发 AI review、轮询状态并阅读 findings 的完整展示层。对象级 user 隔离已有，但尚未用自动化测试锁住；UI 仍是功能向 MVP。
 
-从路线图角度看，当前已经完成 Step 1 到 Step 8B，下一步进入 Step 8C。
+从路线图角度看，当前已经完成 Step 1 到 Step 8D。下一步是 Step 9（Webhook 自动化）。安全、UI、模型质量与测试债放在 Step 11，不阻塞 Step 9。
 
 ## 当前核心数据模型
 
@@ -353,21 +394,21 @@ Step 8 总状态：已完成 Phase 8A - 8B，下一步进入 Phase 8C
 
 ## 下一步计划
 
-下一阶段进入 Step 8C，按优先级推进：
+展示层 MVP 已完成。按优先级推进：
 
-1. Phase 8C：PR 详情触发 review job，并轮询 `pending / processing / completed / failed`
-2. Phase 8D：findings 展示、按文件和严重级别过滤
-3. 后续再做 Step 9 Webhook 自动化，以及 Step 10 部署与监控
+1. Step 9：GitHub webhook，PR opened / synchronized 时自动同步并创建 review job
+2. Step 10：部署、监控、CI/CD、非 root worker 等工程化
+3. Step 11：安全测试、UI polish、模型质量与集成测试（可与 9/10 并行，但不作为 9 的前置）
 
-chunk 模式的更系统化集成测试可以在 Step 8 并行补，但不阻塞展示层。
+chunk 模式的更系统化集成测试已记入 Step 11，不阻塞 webhook。
 
 ## 项目状态
 
-当前项目已完成 GitHub 集成、结构化 AI review、异步任务系统，以及前端登录和 Repo/PR 浏览。用户可以在浏览器里登录、同步并查看仓库与 PR。下一步是 Step 8C：把已有的 `202 + 轮询` 契约接到 PR 页面。
+当前项目已完成 GitHub 集成、结构化 AI review、异步任务系统，以及前端登录、Repo/PR 浏览、触发 review 与 findings 阅读。用户可以在浏览器里走完「登录 → sync → Run AI review → 点 job 看 findings → 点进文件看行内评论」。下一步是 Step 9：用 webhook 去掉手工 sync / 手工触发。
 
 ## 当前阶段测试计划
 
-Step 7E 的 task 层失败路径已经用自动化测试锁住。展示层开工后，仍建议补完结构化 review 在不同输入规模下的稳定性测试。
+Step 7E 的 task 层失败路径已经用自动化测试锁住。Step 8 展示层目前以手工验证为主。结构化 review 在不同输入规模下的稳定性测试，以及 IDOR 测试，已记入 Step 11。
 
 已完成验证：
 
@@ -381,8 +422,11 @@ Step 7E 的 task 层失败路径已经用自动化测试锁住。展示层开工
 - Beat reclaim task 会调用回收逻辑
 - 前端 GitHub 登录 / 登出 / session 保持
 - 前端仓库列表与 PR 列表，刷新走 GET 而不自动 sync GitHub
+- 前端 PR 详情可触发 review 并轮询 `pending / processing / completed / failed`
+- 点 review job 可展示该 job 的 summary 与 findings，过滤后列表会变
+- 点 finding 可进入对应文件 diff 并定位行号；无效 `jobId` 显示 not found
 
-仍建议补完的测试：
+仍建议补完的测试（Step 11，不阻塞 Step 9）：
 
 1. 小 PR 成功路径测试
    - 条件：改动总量小于 1000 行，且文件数不超过 30
@@ -419,7 +463,7 @@ Step 7E 的 task 层失败路径已经用自动化测试锁住。展示层开工
    - 预期：重复 findings 会被去重
    - 预期：chunk 模式下缺失的 `file_path` 会被 fallback 补齐
 
-这些测试不阻塞 Step 8。展示层可以先消费已稳定的小 PR 成功路径。
+这些测试对应 Step 11「Chunk 路径集成测试」，不阻塞 Step 9。展示层已可消费已稳定的小 PR 成功路径。
 
 
 

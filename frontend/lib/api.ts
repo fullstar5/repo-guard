@@ -77,6 +77,22 @@ export type PullRequestFileDetail = PullRequestFile & {
 
 export type ReviewJobStatus = "pending" | "processing" | "completed" | "failed";
 
+export type ReviewFindingSeverity = "low" | "medium" | "high" | "critical";
+
+
+export type ReviewFinding = {
+    id: number;
+    severity: ReviewFindingSeverity;
+    summary: string;
+    file_path: string | null;
+    pr_file_id: number | null;
+    start_line: number | null;
+    end_line: number | null;
+    suggestion: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
 
 export type ReviewJob = {
     id: number;
@@ -88,7 +104,7 @@ export type ReviewJob = {
     total_chunks: number;
     error_message: string | null;
     result_summary: string | null;
-    findings: unknown[];
+    findings: ReviewFinding[];
     created_at: string;
     updated_at: string;
 };
@@ -174,5 +190,11 @@ export async function createReviewJob(pullRequestId: number): Promise<ReviewJob>
             model_name: "openrouter/free",
         },
     );
+    return response.data;
+}
+
+
+export async function getReviewJob(reviewJobId: number): Promise<ReviewJob> {
+    const response = await api.get<ReviewJob>(`/review-jobs/${reviewJobId}`)
     return response.data;
 }
