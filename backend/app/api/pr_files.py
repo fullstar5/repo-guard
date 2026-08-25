@@ -1,8 +1,9 @@
-import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy.ext.asyncio import AsyncSession
+import httpx  # pyright: ignore[reportMissingImports]
+from fastapi import APIRouter, Depends, HTTPException, Request, status  # pyright: ignore[reportMissingImports]
+from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 
 from app.api.deps import get_current_user, get_db
+from app.schemas.pull_request import PullRequestRead
 from app.models.user import User
 from app.schemas.pr_file import (
     PullRequestFileListItem,
@@ -12,9 +13,10 @@ from app.schemas.pr_file import (
 )
 from app.services.github_pr_files import (
     fetch_github_pull_request_files,
+    get_PR_file_for_user,
     get_pull_request_with_repository,
+    list_PR_files,
     sync_pull_request_files,
-    list_PR_files
 )
 
 
@@ -29,6 +31,7 @@ async def sync_pull_request_files_endpoint(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """sync PR files for single PR"""
     if not current_user.github_access_token:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -75,6 +78,7 @@ async def list_PR_files_endpoint(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """endpoint that list all PR files for single PR"""
     pull_request, repository = await get_pull_request_with_repository(
         db=db,
         pull_request_id=pull_request_id,
@@ -92,3 +96,49 @@ async def list_PR_files_endpoint(
         count=len(files),
         items=[PullRequestFileListItem.model_validate(item) for item in files],
     )
+
+
+@router.get(
+    "/{pull_request_id}/files/{file_id}",
+    response_model=PullRequestFileRead,
+)
+async def get_PR_file(
+    pull_request_id: int,
+    file_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return one synced file including its patch, scoped to the current user."""
+    pr_file = await get_PR_file_for_user(
+        db=db,
+        pull_request_id=pull_request_id,
+        file_id=file_id,
+        user_id=current_user.id,
+    )
+    if pr_file is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Pull request file not found",
+        )
+    return PullRequestFileRead.model_validate(pr_file)
+
+
+
+@router.get("/{pull_request_id}", response_model=PullRequestRead)
+async def get_pull_request(
+    pull_request_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+): 
+    """return single PR based on PR id"""
+    pull_request, repository = await get_pull_request_with_repository(
+        db=db,
+        pull_request_id=pull_request_id,
+        user_id=current_user.id,
+    )
+    if pull_request is None or repository is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Pull Reqeust not found",
+        )
+    return PullRequestRead.model_validate(pull_request)

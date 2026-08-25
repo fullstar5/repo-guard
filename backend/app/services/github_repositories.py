@@ -1,6 +1,6 @@
-import httpx
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+import httpx  # pyright: ignore[reportMissingImports]
+from sqlalchemy import select  # pyright: ignore[reportMissingImports]
+from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 
 from app.models.repository import Repository
 from app.models.user import User

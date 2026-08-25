@@ -41,7 +41,7 @@ def _extract_json_text(raw_text: str) -> str:
         except json.JSONDecodeError:
             continue
     
-    raise ValueError("Model did not return valid JSON content.")
+    raise ValueError("Model did not return valid JSON content.")   # model returned content but not in valid format
 
 
 
@@ -128,7 +128,15 @@ class OpenRouterReviewProvider(ReviewProvider):
         response.raise_for_status()
 
         payload = response.json()
-        raw_content = payload["choices"][0]["message"]["content"]
+        message = payload["choices"][0]["message"]
+        raw_content = message.get("content")
+
+        if raw_content is None or (isinstance(raw_content, str) and not raw_content.strip()):
+            raise ValueError(
+                "Model returned empty content. "
+                f"message_keys={list(message.keys())} "
+                f"finish_reason={payload['choices'][0].get('finish_reason')}"
+            )
 
         if not isinstance(raw_content, str):
             raw_content = json.dumps(raw_content, ensure_ascii=False)
