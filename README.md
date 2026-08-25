@@ -269,17 +269,97 @@ Step 7 总状态：已完成 Phase 7A - 7E
 
 Step 8 总状态：已完成 Phase 8A - 8D。展示层功能闭环已通，视觉与安全工程化补强见 Step 11。
 
-### Step 9: 自动化触发
+### Step 9: GitHub Event-Driven Automation
 
-目的：让系统不再依赖手工点击同步和分析。  
+目的：把 CodeGuard 从「用户主动点 Sync / Run AI review」升级为由 GitHub Pull Request 事件驱动的异步 review 系统。  
+原则：**不重构已经工作的 AI pipeline**（Step 3–7 的 sync / `create_review_job` / Celery / OpenRouter）。Webhook 只接到这条链前面。
+
+身份约束（第一轮不做 GitHub App）：
+
+- 现有模型是 GitHub OAuth 用户 token，仓库挂在 `repositories.user_id` 上
+- Webhook **没有** JWT / `current_user`
+- 用 `payload.repository.id` → `repositories.github_repo_id` → owner 的 OAuth token
+- 本地还没有该仓库则记日志并跳过，不在 webhook 里给陌生人建用户
+
+开发环境公网入口（ngrok / Cloudflare Tunnel）只是把 `localhost` 暴露给 GitHub 的工具，**不是**正式架构组件，不要写进业务代码。生产入口属于 Step 10。
+
+状态：未开始。下一步从 9A 动手。
+
+#### Phase 9A: GitHub Webhook（验签 + 过滤，不跑 AI）
+
+目标：GitHub 能把事件送到 CodeGuard，并证明请求真的来自 GitHub。
+
 要做的事情：
 
-- 接入 GitHub webhook
-- PR opened / synchronized 时自动同步
-- 自动创建 review job
-- 后续可支持自动评论回 GitHub
+- 增加 `POST /webhooks/github`（**不要** `Depends(get_current_user)`）
+- 配置 `GITHUB_WEBHOOK_SECRET`；开发时用隧道提供公网 URL
+- 用**原始 request body** 校验 `X-Hub-Signature-256`（HMAC SHA-256）；失败返回 401/403
+- 只关心 `X-GitHub-Event: pull_request`，第一阶段只**入队处理** `opened` 和 `synchronize`
+- 记录 `X-GitHub-Delivery`、event type、action；马上返回 2xx
+- `ping` 以及未支持的 action：仍返回 2xx + 打日志，**不**当 4xx（否则 GitHub 设置页显示投递失败）
+
+Webhook **不执行 AI、不等待 Celery、不调用 OpenRouter**。它只做：Verify → Validate →（9B 起才 Dispatch）→ Return。
+
+建议实现顺序：
+
+1. 确认现有 `users` / `repositories` / `pull_requests` 和 GitHub sync service
+2. 定 endpoint 职责和文件位置
+3. 配 secret 与隧道
+4. 实现原始 body + HMAC
+5. 过滤 `pull_request` + `opened` / `synchronize`
+6. 用 GitHub 测试 webhook（含 ping）
 
 状态：未开始
+
+#### Phase 9B: 自动 Review Pipeline
+
+目标：复用 Step 3–7，把 webhook 接到现有 sync 和 review job。不要再写第二套 webhook-only review service。
+
+流程：
+
+```text
+GitHub pull_request
+  → HMAC
+  → 按 github_repo_id 找本地 repository
+  → 取 owner OAuth token
+  → 现有 sync PR
+  → 现有 sync files / patches
+  → 现有 create_review_job
+  → Celery.delay(review_job_id)
+  → 已有 worker / OpenRouter / findings / 前端轮询
+```
+
+说明：
+
+- 同步和建 job 必须在 Celery（或同等队列）里做，不能在 webhook 请求里跑完
+- 前端 60s 轮询 job 状态**保留**：Webhook 替代的是「要不要去 GitHub 拉 PR」，不是「浏览器怎么知道 AI 做完了」
+- 9B 可以暂时「每次 synchronize 都建 job」；重复 job 的抑制放到 9C
+
+状态：未开始
+
+#### Phase 9C: Reliability & Idempotency
+
+目标：同一投递不处理两遍；连推不刷一串 review job。
+
+两层幂等：
+
+1. **投递幂等**：表 `github_webhook_events`，`UNIQUE(delivery_id)`。同一 `X-GitHub-Delivery` 重放则 ignore。
+2. **业务幂等**：该 PR 已有 `pending` / `processing` 的 review job 则 skip，不再 `create_review_job`。  
+   （不同 delivery 的连续 `synchronize` 单靠 delivery 表挡不住。）
+
+状态：未开始
+
+#### Phase 9D: GitHub Comment（可选 / 最后做）
+
+目标：把 findings 汇总评论写回 PR。第一轮不做。
+
+注意：若还订阅了 `issue_comment`，自己的评论可能再打进 webhook 形成环。即使做 9D，也继续只订 `pull_request`，并过滤 bot 自己的事件。
+
+GitHub App / Installation token 不在本步范围，作为以后的 Version 2。
+
+状态：可选，未开始
+
+Step 9 总状态：未开始，下一阶段是 Phase 9A
 
 ### Step 10: 部署与工程化完善
 
@@ -330,7 +410,7 @@ Step 8 总状态：已完成 Phase 8A - 8D。展示层功能闭环已通，视�
 
 - [ ] **模型选择表单** — 针对 Step 8C 触发 review：单按钮写死 `openrouter/free`。若要可选模型，再用已安装的 React Hook Form + Zod。
 - [ ] **组织 / 多成员** — 针对 Step 3 的「一用户镜像自己的 GitHub」模型：没有 org、没有分享仓库。
-- [ ] **评论写回 GitHub** — 仍属 Step 9「后续可支持自动评论回 GitHub」，不在 Step 8 范围；此处仅作提醒，避免和展示层 polish 混在一起。
+- [ ] **评论写回 GitHub** — 即 Step 9D，不在 Step 8 范围；完成 9A–9C 后再做。
 
 ## 当前进度
 
@@ -396,7 +476,7 @@ Step 8 总状态：已完成 Phase 8A - 8D。展示层功能闭环已通，视�
 
 展示层 MVP 已完成。按优先级推进：
 
-1. Step 9：GitHub webhook，PR opened / synchronized 时自动同步并创建 review job
+1. Step 9：从 9A 开始（公网可达 + HMAC 验签 + 事件过滤，不跑 AI）；9B 接现有 sync/Celery；9C 两层幂等；9D 评论可选
 2. Step 10：部署、监控、CI/CD、非 root worker 等工程化
 3. Step 11：安全测试、UI polish、模型质量与集成测试（可与 9/10 并行，但不作为 9 的前置）
 
@@ -404,7 +484,7 @@ chunk 模式的更系统化集成测试已记入 Step 11，不阻塞 webhook。
 
 ## 项目状态
 
-当前项目已完成 GitHub 集成、结构化 AI review、异步任务系统，以及前端登录、Repo/PR 浏览、触发 review 与 findings 阅读。用户可以在浏览器里走完「登录 → sync → Run AI review → 点 job 看 findings → 点进文件看行内评论」。下一步是 Step 9：用 webhook 去掉手工 sync / 手工触发。
+当前项目已完成 GitHub 集成、结构化 AI review、异步任务系统，以及前端登录、Repo/PR 浏览、触发 review 与 findings 阅读。用户可以在浏览器里走完「登录 → sync → Run AI review → 点 job 看 findings → 点进文件看行内评论」。下一步是 Step 9A：`POST /webhooks/github` + HMAC 验签 + 只记录 `opened`/`synchronize`，不在 webhook 里跑 AI。
 
 ## 当前阶段测试计划
 
