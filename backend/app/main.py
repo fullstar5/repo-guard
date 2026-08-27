@@ -10,6 +10,7 @@ from app.api.repositories import router as repositories_router
 from app.api.pull_requests import router as pull_requests_router
 from app.api.pr_files import router as pull_request_files_router
 from app.api.review_jobs import router as review_jobs_router
+from app.api.webhooks import router as webhooks_router
 from app.core.database import engine
 from app.core.config import get_settings
 
@@ -42,6 +43,7 @@ app.include_router(repositories_router)
 app.include_router(pull_requests_router)
 app.include_router(pull_request_files_router)
 app.include_router(review_jobs_router)
+app.include_router(webhooks_router)
 
 
 @app.get("/")

@@ -17,6 +17,7 @@ celery_app = Celery(
     include=[
         "app.tasks.debug",   # demo practice
         "app.tasks.review_jobs",   # review code job
+        "app.tasks.github_webhooks",   # sync PR and files, enqueue review task when github call
     ],
 )
 
