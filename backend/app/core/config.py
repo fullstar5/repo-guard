@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     github_client_id: str
     github_client_secret: str
     github_redirect_uri: str
+    github_webhook_secret: str   # used to authenticate message from github
 
     frontend_url: str
     github_oauth_scope: str
