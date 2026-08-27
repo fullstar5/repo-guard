@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Request, status  # pyright: ignore[reportMissingImports]
 
 from app.core.config import get_settings
 from app.services.github_webhook import (
