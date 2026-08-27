@@ -1,6 +1,7 @@
 import httpx  # pyright: ignore[reportMissingImports]
 from sqlalchemy import select  # pyright: ignore[reportMissingImports]
 from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
+from sqlalchemy.orm import selectinload  # pyright: ignore[reportMissingImports]
 
 from app.models.repository import Repository
 from app.models.user import User
@@ -81,6 +82,20 @@ async def list_repos_for_user(
     result = await db.execute(
         select(Repository).where(Repository.user_id == user_id)
         .order_by(Repository.updated_at.desc())
+    )
+
+    return list(result.scalars().all())
+
+
+
+async def list_repo_by_github_repo_id(
+    db: AsyncSession,
+    github_repo_id: int,
+) -> list[Repository]:
+    """service that find local repo for github repo id"""
+    result = await db.execute(
+        select(Repository).options(selectinload(Repository.user))
+        .where(Repository.github_repo_id == github_repo_id)
     )
 
     return list(result.scalars().all())

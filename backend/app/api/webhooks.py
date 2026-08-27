@@ -9,7 +9,7 @@ from app.services.github_webhook import (
     summarize_github_event,
     verify_github_signature,
 )
-
+from app.tasks.github_webhooks import process_github_pull_request_webhook
 
 
 
@@ -55,6 +55,9 @@ async def github_webhook(request: Request):
         payload=payload,
     )
     log_github_webhook_event(summary)
+    # if it's a task that need to be handled, trigger background celery task: github_webhooks.process_github_pull_request_webhook
+    if summary["handled"]:
+        process_github_pull_request_webhook.delay(payload)
     return {
         "accepted": True,
         "delivery_id": summary["delivery_id"],
