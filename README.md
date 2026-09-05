@@ -39,6 +39,8 @@ README 原定前端栈与当前使用情况：
 - 已安装但未在业务代码中使用：React Hook Form, Zod, lucide-react
 - 未使用原因：8C 触发 review 目前是单按钮，尚未做模型选择表单；lucide-react 预留给后续 UI polish（Step 11）
 
+
+
 ## 当前系统流程
 
 目前已经打通的主流程如下：
@@ -56,9 +58,11 @@ README 原定前端栈与当前使用情况：
 11. GitHub `pull_request` webhook（HMAC 验签）入队后，worker 自动 sync files、创建 review job 并走现有 AI pipeline
 12. Celery Beat 定期回收卡在 `processing` 的僵尸 job
 
+
+
 ## 项目路线图
 
-整个项目可以分为 11 个主要步骤。每一步都对应一个明确的工程目标，而不是为了堆技术而堆技术。Step 1–8 已完成功能闭环；Step 9A–9B 已完成 webhook 自动 review；Step 9C 幂等与 9D 评论未开始；Step 10 是部署；Step 11 是产品化补强。
+整个项目可以分为 11 个主要步骤。每一步都对应一个明确的工程目标，而不是为了堆技术而堆技术。Step 1–8 已完成功能闭环；Step 9A–9C 已完成 webhook 自动 review 与两层幂等；9D 评论暂缓；当前进入 Step 10 部署与工程化；Step 11 是产品化补强。
 
 ### Step 1: 项目初始化
 
@@ -284,7 +288,7 @@ Step 8 总状态：已完成 Phase 8A - 8D。展示层功能闭环已通，视�
 
 开发环境公网入口（ngrok / Cloudflare Tunnel）只是把 `localhost` 暴露给 GitHub 的工具，**不是**正式架构组件，不要写进业务代码。生产入口属于 Step 10。
 
-状态：9A / 9B 已完成。下一步是 9C。
+状态：9A / 9B / 9C 已完成。9D 暂缓，下一步进入 Step 10。
 
 #### Phase 9A: GitHub Webhook（验签 + 过滤，不跑 AI）
 
@@ -345,10 +349,10 @@ GitHub pull_request
 两层幂等：
 
 1. **投递幂等**：表 `github_webhook_events`，`UNIQUE(delivery_id)`。同一 `X-GitHub-Delivery` 重放则 ignore。
-2. **业务幂等**：该 PR 已有 `pending` / `processing` 的 review job 则 skip，不再 `create_review_job`。  
-   （不同 delivery 的连续 `synchronize` 单靠 delivery 表挡不住。）
+2. **业务幂等**：该 PR 已有 `pending` / `processing` 的 review job 则 skip，不再 `create_review_job`。
+  （不同 delivery 的连续 `synchronize` 单靠 delivery 表挡不住。）
 
-状态：未开始
+状态：已完成（`github_webhook_events.delivery_id` 唯一约束防止同一 delivery 重放；PR 行锁 + active job 部分唯一索引防止 `pending` / `processing` job 重复创建；手动与 webhook 入口复用同一检查。）
 
 #### Phase 9D: GitHub Comment（可选 / 最后做）
 
@@ -358,22 +362,100 @@ GitHub pull_request
 
 GitHub App / Installation token 不在本步范围，作为以后的 Version 2。
 
-状态：可选，未开始
+状态：可选，暂缓；当前优先进入 Step 10。
 
-Step 9 总状态：已完成 Phase 9A - 9B。下一步是 Phase 9C（两层幂等）。9D 仍为可选。
+Step 9 总状态：已完成 Phase 9A - 9C。9D 暂缓，下一步进入 Step 10。
 
 ### Step 10: 部署与工程化完善
 
 目的：把项目从本地开发原型提升为可部署、可维护的工程系统。  
-要做的事情：
 
-- Docker 化
-- 引入 RabbitMQ / Worker 部署方案
-- Kubernetes / Terraform
-- 监控、日志、告警
-- CI/CD 与部署流水线
+第一阶段约束：
 
-状态：未开始
+- 正式业务部署以**严格 0 成本**为目标，不启用会自动产生按量账单的运行资源
+- Northflank Developer Sandbox 承载后端运行时；Neon / Upstash 继续保存持久数据，用户数据不落到临时容器磁盘
+- Vercel Hobby 仅用于当前个人学习和作品集阶段；未来商业化时升级或迁移
+- GCP Free Tier / credit 仅作为隔离的 Terraform、VM、Cloud Run、GKE 练习环境，不接入 CodeGuard 真实数据和生产密钥
+- 免费平台没有生产 SLA；代码、镜像、迁移、密钥、CI/CD 和回滚仍按产品级流程建设
+
+第一阶段目标架构：
+
+```text
+Browser
+  → Vercel Next.js
+  → 同源 /api rewrite
+  → Northflank FastAPI Service
+  → Northflank RabbitMQ Addon
+  → Northflank Celery Worker Service
+  → OpenRouter
+  → Neon PostgreSQL
+
+Northflank Cron Job
+  → 定时发送 stale review job reclaim task
+
+FastAPI
+  → Upstash Redis（分布式限流）
+```
+
+#### Phase 10A: Production Baseline
+
+- 加固后端 Dockerfile：非 root 用户、可复现构建、API / worker / migration / cron 复用同一镜像
+- 拆分 liveness / readiness；liveness 不访问外部服务，readiness 检查必要依赖
+- 增加不含密钥的 `.env.example` 和生产配置校验
+- 所有业务持久数据继续写入 Neon；容器磁盘只保存临时文件和受限日志
+
+状态：实现已完成（后端镜像改为非 root 且仅复制运行/迁移文件；增加 `/health/live` 与 `/health/ready`；Redis 故障降级但不触发容器重启；生产环境强制 HTTPS、安全 Cookie 和足够长度的 JWT/Webhook secret；Compose 增加单 worker 并发、健康检查和日志轮转）。自动化测试已通过；Docker 构建需在启用 Docker Desktop WSL integration 后补验。
+
+#### Phase 10B: Upstash Redis Rate Limiting
+
+- Redis 不为了堆技术而缓存数据库数据，第一项真实业务用途是分布式限流
+- 对 OAuth、repository / PR / files sync、review job 创建按 IP / user / object 限流
+- review 和 sync 写路径在 Redis 不可用时 fail closed；GET 读路径不依赖 Redis
+- Webhook delivery 与 review job 幂等继续使用 PostgreSQL，不迁移到 Redis
+- Upstash REST Redis 不作为 Celery broker，RabbitMQ 链路保持不变
+
+#### Phase 10C: Frontend / Cookie / OAuth
+
+- Vercel 将 `/api/:path*` rewrite 到 Northflank API，浏览器始终使用同源 `/api`
+- GitHub OAuth callback 使用 Vercel `/api/auth/github/callback`，再由 rewrite 转发到 FastAPI
+- 保持第一方 `httpOnly + Secure + SameSite=Lax` Cookie，避免跨平台域名导致 session 丢失
+- GitHub webhook 使用 Northflank API 的稳定公网 URL 直连
+
+#### Phase 10D: Northflank Runtime
+
+- Service 1：FastAPI API
+- Service 2：Celery worker，限制并发和资源使用
+- Addon：私有 RabbitMQ，不向公网暴露管理端口
+- Cron Job：每 10 分钟发送 `mark_abandoned_jobs_as_failed`，替代占用第三个 Service 的常驻 Celery Beat
+- Secret Group 按 API / worker / cron 最小权限注入 Neon、Upstash、OpenRouter、GitHub 和 RabbitMQ 配置
+- 不启用付费扩容、额外 Service、持久卷或超出 Sandbox 的资源
+
+#### Phase 10E: CI/CD
+
+- GitHub Actions CI：后端 pytest、Alembic head / migration 检查、前端 lint / typecheck / build、Docker build
+- 合并到 `main` 后只构建一次 backend 镜像，以 Git commit SHA 标记并推送 GHCR
+- 先运行 Northflank migration Job：`alembic upgrade head`
+- migration 成功后，API 与 worker 部署同一个 immutable image digest
+- migration 失败立即停止发布，不更新 API / worker
+- Northflank 使用 Template / API / Release Flow 管理资源；当前 Terraform provider 无法完整管理 Service / Job / Addon，不用 `local-exec` 伪装完整 IaC
+- 前端由 Vercel Git Integration 发布；PR 生成 Preview，`main` 发布 Production
+
+#### Phase 10F: Observability / Rollback / Zero-Cost Guardrails
+
+- API / worker 结构化日志包含 delivery ID、review job ID 和 Celery task ID
+- 监控 API 5xx、worker 离线、RabbitMQ 队列堆积、stale job、migration 失败
+- API / worker 按 image digest 回滚；应用回滚不自动执行 Alembic downgrade
+- GHCR 只保留必要镜像版本；限制日志体积和保留期
+- 定期检查 Vercel、Northflank、Neon、Upstash、CloudAMQP/GHCR 的免费额度与政策变化
+
+#### Phase 10G: Isolated GCP Learning Lab
+
+- 使用 GCP credit / Always Free 单独练习 Terraform、VPC、IAM、Compute Engine、Cloud Run 和 GKE
+- 不注入 CodeGuard 的 Neon、RabbitMQ、GitHub OAuth、Webhook 或 OpenRouter 生产密钥
+- 每个实验设置预算告警和销毁步骤，结束后执行 `terraform destroy`
+- Kubernetes / Terraform 学习成果后续再迁移到正式付费生产方案，不把单节点免费环境描述为高可用生产集群
+
+状态：Phase 10A 实现完成，Docker 构建验证待补。下一步是 Phase 10B（Upstash Redis 分布式限流）
 
 ### Step 11: 产品化补强（不阻塞 Step 9）
 
@@ -389,6 +471,8 @@ Step 9 总状态：已完成 Phase 9A - 9B。下一步是 Phase 9C（两层幂�
 - [ ] **Cookie session 加固清单** — 针对 Step 8A「httpOnly cookie session」：核对 SameSite / CSRF、CSP；补按对象的速率限制和审计日志。
 - [ ] **资源 ID 策略** — 针对 Step 8D 的 `?jobId=` / `/files/{id}` 以及 Step 3 的自增主键：跨用户已 404，同一账号仍可枚举自己的整数 id。多租户或分享链接前再评估。
 
+
+
 #### UI / UX
 
 - [ ] **信息层级与导航** — 针对 Step 8 整体展示层：PR 标题、分支、review 状态应一眼能扫，而不是先翻表。
@@ -398,6 +482,8 @@ Step 9 总状态：已完成 Phase 9A - 9B。下一步是 Phase 9C（两层幂�
 - [ ] **路由级错误与鉴权边界** — 针对 Step 8A–8D：补共享 authenticated layout、`loading.tsx` / `error.tsx` / `not-found.tsx`，统一处理无效 ID、后端 404 和会话失效，避免每个页面重复认证与泛化错误文案。
 - [ ] **Review 状态反馈** — 针对 Step 8C：创建 job 后自动选中该 job；文件 diff 页也应刷新活跃 job，避免用户停留在文件页时看不到完成状态。
 - [ ] **视觉风格** — 针对 Step 8 展示层：目前是 shadcn 默认件 + 表格，没有品牌和设计 token。可用已安装的 lucide-react 补图标。
+
+
 
 #### 可靠性、模型与测试
 
@@ -412,14 +498,18 @@ Step 9 总状态：已完成 Phase 9A - 9B。下一步是 Phase 9C（两层幂�
 - [ ] **Worker 并发执行保护** — 针对 Step 7B/7E：终态 job 已会跳过，但同一 `pending` / `processing` job 仍可能被多个 worker 并发消费；需用数据库原子状态迁移或锁保证同一 job 只有一个执行者。
 - [ ] **Review 查询负载拆分** — 针对 Step 8C：job 历史列表不应长期携带所有 findings；列表返回摘要，选中后再请求 `GET /review-jobs/{id}`，避免历史 job 增长后轮询 payload 持续膨胀。
 - [ ] **Worker 非 root 运行** — 针对 Step 7E 本地 compose 和 Step 10「Worker 部署方案」：当前 Celery worker 以 root 跑，有 SecurityWarning。
-- [ ] **Redis `/health` 在受限网络下失败** — 针对 Step 2「`/health` 健康检查」：校园网等环境 DNS 拦 `upstash.io` 时健康检查失败；review 主路径并不走 Redis。
+- [ ] **Redis** `/health` **在受限网络下失败** — 针对 Step 2「`/health` 健康检查」：校园网等环境 DNS 拦 `upstash.io` 时健康检查失败；review 主路径并不走 Redis。
 - [ ] **配置与迁移工程化** — 针对 Step 2 / Step 10：补不含密钥的 `.env.example`，确保 Alembic autogenerate 导入全部 model，并在 CI 中校验迁移链与 ORM metadata 一致。
+
+
 
 #### 产品边界（与 Step 9 的交界，但不替代 webhook）
 
 - [ ] **模型选择表单** — 针对 Step 8C 触发 review：单按钮写死 `openrouter/free`。若要可选模型，再用已安装的 React Hook Form + Zod。
 - [ ] **组织 / 多成员** — 针对 Step 3 的「一用户镜像自己的 GitHub」模型：没有 org、没有分享仓库。
 - [ ] **评论写回 GitHub** — 即 Step 9D，不在 Step 8 范围；完成 9A–9C 后再做。
+
+
 
 ## 当前进度
 
@@ -466,11 +556,14 @@ Step 9 总状态：已完成 Phase 9A - 9B。下一步是 Phase 9C（两层幂�
 - `POST /webhooks/github`：原始 body HMAC（`X-Hub-Signature-256`），无 JWT
 - 仅将 `pull_request` 的 `opened` / `synchronize` 入队；`ping` 与其它 action 仍 2xx 且不入队
 - Celery `process_github_pull_request_webhook`：按 `github_repo_id` 找本地 repo 与 owner OAuth token，复用 sync PR / files / `create_review_job` / `execute_review_job_task`
+- `github_webhook_events` + `UNIQUE(delivery_id)`：同一 GitHub delivery 重放只接受一次，重复请求返回 2xx 但不再次入队
+- Review job 业务幂等：手动与 webhook 入口统一检查 active job；PR 行锁串行化并发创建，部分唯一索引保证同一 PR 只有一个 `pending` / `processing` job
+- 9C 自动化测试：覆盖新 delivery、重复 delivery、broker 发布失败补偿、ping，以及 active job 复用/新建路径
 - 开发环境用 ngrok 把 `localhost:8000` 暴露给 GitHub（非架构组件）
 
-当前已经具备手动与自动两条入口：用户可在浏览器里「登录 → sync → Run AI review → 读 findings」；也可 `git push` 后由 webhook 自动建 job 并完成 review。对象级 user 隔离已有，但尚未用自动化测试锁住；同一 PR 连续 push 仍可能创建多个 job（9C）。UI 仍是功能向 MVP。
+当前已经具备手动与自动两条入口：用户可在浏览器里「登录 → sync → Run AI review → 读 findings」；也可 `git push` 后由 webhook 自动建 job 并完成 review。9C 已阻止同一 delivery 重放和同一 PR 的活跃 job 重复创建。对象级 user 隔离已有但尚未用自动化测试锁住；UI 仍是功能向 MVP。
 
-从路线图角度看，当前已经完成 Step 1 到 Step 9B。下一步是 Step 9C（投递幂等 + 活跃 job 去重）。
+从路线图角度看，当前已经完成 Step 1 到 Step 9C。9D 评论回写暂缓，下一步进入 Step 10（部署与工程化）。
 
 ## 当前核心数据模型
 
@@ -482,27 +575,27 @@ Step 9 总状态：已完成 Phase 9A - 9B。下一步是 Phase 9C（两层幂�
 - `pull_request_files`
 - `review_jobs`
 - `review_findings`
+- `github_webhook_events`
 
 这些表已经可以支持 GitHub 数据同步、结构化 AI review 和 findings 存储流程。
 
 ## 下一步计划
 
-GitHub webhook 自动 review（9A/9B）已完成。按优先级推进：
+GitHub webhook 自动 review 与9C两层幂等已经完成。按优先级推进：
 
-1. Step 9C：`github_webhook_events.delivery_id` 唯一 + 该 PR 已有 `pending`/`processing` job 则 skip
-2. Step 9D（可选）：findings 写回 GitHub PR 评论
-3. Step 10：部署、监控、CI/CD、非 root worker 等工程化
-4. Step 11：安全测试、UI polish、模型质量与集成测试（可与 9C/10 并行）
+1. Step 10：确定部署平台和生产拓扑，完成前后端、worker、broker、数据库迁移、域名/TLS、CI/CD、日志监控
+2. Step 11：安全测试、UI polish、模型质量与集成测试（可与 Step 10 并行）
+3. Step 9D（可选、暂缓）：findings 写回 GitHub PR 评论
 
-chunk 模式的更系统化集成测试已记入 Step 11，不阻塞 9C。
+chunk 模式的更系统化集成测试已记入 Step 11，不阻塞部署方案设计。
 
 ## 项目状态
 
-当前项目已完成 GitHub 集成、结构化 AI review、异步任务、前端展示，以及 webhook 驱动的自动 review。用户既可以手动点 Run AI review，也可以 `git push` 后由 GitHub 通知 CodeGuard 自动 sync files 并创建 review job。下一步是 Step 9C：同一投递不处理两遍，且已有活跃 job 时不再新建。
+当前项目已完成 GitHub 集成、结构化 AI review、异步任务、前端展示、webhook 驱动的自动 review，以及 delivery/active job 两层幂等。9D GitHub 评论回写暂缓；当前进入 Step 10，目标是把本地可运行 MVP 提升为可部署、可迁移、可观测、可持续发布的系统。
 
 ## 当前阶段测试计划
 
-Step 7E 的 task 层失败路径已经用自动化测试锁住。Step 8 展示层目前以手工验证为主。结构化 review 在不同输入规模下的稳定性测试，以及 IDOR 测试，已记入 Step 11。
+Step 7E 的 task 层失败路径和 Step 9C 的核心幂等路径已经用自动化测试锁住。Step 8 展示层目前以手工验证为主。结构化 review 在不同输入规模下的稳定性测试，以及 IDOR 测试，已记入 Step 11。
 
 已完成验证：
 
@@ -521,58 +614,55 @@ Step 7E 的 task 层失败路径已经用自动化测试锁住。Step 8 展示�
 - 点 finding 可进入对应文件 diff 并定位行号；无效 `jobId` 显示 not found
 - GitHub webhook HMAC 验签：错误签名 401；`ping` 与 `pull_request.synchronize` 返回 200
 - push 到已 sync 仓库的 PR 后，不点 Run AI review 也会自动出现 review job 并可以 `completed`
+- 相同 `delivery_id` 重放返回 2xx 且不重复 dispatch；broker 发布失败会删除 delivery 记录以允许 GitHub 重试
+- 同一 PR 已有 `pending` / `processing` job 时，手动与 webhook 入口复用已有 job，不重复创建或入队
+- 当前后端自动化测试共 10 个并全部通过
 
-仍建议补完的测试（Step 11，不阻塞 Step 9）：
+仍建议补完的测试（Step 11，不阻塞 Step 10）：
 
 1. 小 PR 成功路径测试
-   - 条件：改动总量小于 1000 行，且文件数不超过 30
-   - 预期：`total_chunks = 1`
-   - 预期：`status = completed`
-   - 预期：`result_summary` 不为空
-   - 预期：`findings` 可正常入库并随接口返回
-
+  - 条件：改动总量小于 1000 行，且文件数不超过 30
+  - 预期：`total_chunks = 1`
+  - 预期：`status = completed`
+  - 预期：`result_summary` 不为空
+  - 预期：`findings` 可正常入库并随接口返回
 2. 大 PR chunk 模式成功路径测试
-   - 条件：改动总量超过单次 review 阈值
-   - 预期：进入 chunk 模式，`total_chunks > 1`
-   - 预期：成功 chunk 的 `summary` 会拼接进 `result_summary`
-   - 预期：成功 chunk 的 `findings` 会写入数据库
-
+  - 条件：改动总量超过单次 review 阈值
+  - 预期：进入 chunk 模式，`total_chunks > 1`
+  - 预期：成功 chunk 的 `summary` 会拼接进 `result_summary`
+  - 预期：成功 chunk 的 `findings` 会写入数据库
 3. chunk 失败重试测试
-   - 条件：人为制造某个 chunk 返回非法 JSON 或解析失败
-   - 预期：单个 chunk 会自动重试 3 次
-   - 预期：3 次失败后记录失败日志
-   - 预期：不会中断后续 chunk 的执行
-
+  - 条件：人为制造某个 chunk 返回非法 JSON 或解析失败
+  - 预期：单个 chunk 会自动重试 3 次
+  - 预期：3 次失败后记录失败日志
+  - 预期：不会中断后续 chunk 的执行
 4. 部分成功测试
-   - 条件：部分 chunk 成功，部分 chunk 失败
-   - 预期：整个 review job 仍可 `completed`
-   - 预期：`error_message` 中包含失败 chunk 信息
-   - 预期：数据库中保留成功 chunk 产出的 findings
-
+  - 条件：部分 chunk 成功，部分 chunk 失败
+  - 预期：整个 review job 仍可 `completed`
+  - 预期：`error_message` 中包含失败 chunk 信息
+  - 预期：数据库中保留成功 chunk 产出的 findings
 5. 全部 chunk 失败测试
-   - 条件：所有 chunk 都返回非法结果
-   - 预期：整个 review job 标记为 `failed`
-   - 预期：`error_message` 中包含失败原因汇总
-
+  - 条件：所有 chunk 都返回非法结果
+  - 预期：整个 review job 标记为 `failed`
+  - 预期：`error_message` 中包含失败原因汇总
 6. 去重与路径补全测试
-   - 条件：不同 chunk 产出重复 findings，或 finding 缺少 `file_path`
-   - 预期：重复 findings 会被去重
-   - 预期：chunk 模式下缺失的 `file_path` 会被 fallback 补齐
+  - 条件：不同 chunk 产出重复 findings，或 finding 缺少 `file_path`
+  - 预期：重复 findings 会被去重
+  - 预期：chunk 模式下缺失的 `file_path` 会被 fallback 补齐
 
 这些测试对应 Step 11「Chunk 路径集成测试」，不阻塞 Step 9。展示层已可消费已稳定的小 PR 成功路径。
-
-
-
 
 Test command
 
 联调整套后端（推荐）：
+
 ```
 cd backend
 docker compose up -d --build
 ```
 
 开发迭代 API 时，可只起队列相关进程，本机热重载：
+
 ```
 docker compose up -d rabbitmq worker beat
 source venv/bin/activate
@@ -580,6 +670,7 @@ uvicorn app.main:app --reload
 ```
 
 跑 7E task 层测试：
+
 ```
 cd backend
 source venv/bin/activate
@@ -587,57 +678,67 @@ pytest -q
 ```
 
 source into environment: 
+
 ```
 source venv/bin/activate
 ```
 
 start backend (without compose api): 
+
 ```
 uvicorn app.main:app --reload
 ```
 
 start rabbitmq: 
+
 ```
 docker compose up -d rabbitmq
 ```
 
 start celery worker: 
+
 ```
 celery -A app.core.celery_app:celery_app worker -l INFO
 ```
 
 start celery beat: 
+
 ```
 celery -A app.core.celery_app:celery_app beat -l INFO --schedule=/tmp/celerybeat-schedule
 ```
 
 verify current user: 
+
 ```
-curl http://127.0.0.1:8000/auth/me \
+curl http://localhost:8000/auth/me \
   -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
 ```
 
 sync REPO:
+
 ```
-curl -X POST http://127.0.0.1:8000/repositories/sync \
+curl -X POST http://localhost:8000/repositories/sync \
   -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
 ```
 
 sync PR for [REPO_ID]:
+
 ```
-curl -X POST http://127.0.0.1:8000/repositories/REPO_ID/pr/sync \
+curl -X POST http://localhost:8000/repositories/REPO_ID/pr/sync \
   -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
 ```
 
 sync PR files for [PR_ID]:
+
 ```
-curl -X POST http://127.0.0.1:8000/pull-requests/PR_ID/files/sync \
+curl -X POST http://localhost:8000/pull-requests/PR_ID/files/sync \
   -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
 ```
 
 create review job:
+
 ```
-curl -X POST http://127.0.0.1:8000/pull-requests/PR_ID/review-jobs \
+curl -X POST http://localhost:8000/pull-requests/PR_ID/review-jobs \
   -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -647,13 +748,15 @@ curl -X POST http://127.0.0.1:8000/pull-requests/PR_ID/review-jobs \
 ```
 
 verify all review jobs for [PR_ID]:
+
 ```
-curl "http://127.0.0.1:8000/pull-requests/3/review-jobs" \
+curl "http://localhost:8000/pull-requests/3/review-jobs" \
   -H "Authorization: Bearer <token>"
 ```
 
 polling status of single review job:
+
 ```
-curl "http://127.0.0.1:8000/review-jobs/<job_id>" \
+curl "http://localhost:8000/review-jobs/<job_id>" \
   -H "Authorization: Bearer <token>"
 ```
