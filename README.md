@@ -53,11 +53,12 @@ README 原定前端栈与当前使用情况：
 8. 调用 OpenRouter 生成结构化 `summary` + `findings` 并落库
 9. 前端 PR 详情触发 review，并以 TanStack Query 轮询 `pending -> processing -> completed / failed`
 10. 前端展示 `result_summary` 与 findings，可按文件 / 严重级别过滤，并跳到对应 diff 行号
-11. Celery Beat 定期回收卡在 `processing` 的僵尸 job
+11. GitHub `pull_request` webhook（HMAC 验签）入队后，worker 自动 sync files、创建 review job 并走现有 AI pipeline
+12. Celery Beat 定期回收卡在 `processing` 的僵尸 job
 
 ## 项目路线图
 
-整个项目可以分为 11 个主要步骤。每一步都对应一个明确的工程目标，而不是为了堆技术而堆技术。Step 1–8 已完成功能闭环；Step 9–10 是自动化与部署；Step 11 是对已完成步骤的产品化补强，不阻塞 Step 9。
+整个项目可以分为 11 个主要步骤。每一步都对应一个明确的工程目标，而不是为了堆技术而堆技术。Step 1–8 已完成功能闭环；Step 9A–9B 已完成 webhook 自动 review；Step 9C 幂等与 9D 评论未开始；Step 10 是部署；Step 11 是产品化补强。
 
 ### Step 1: 项目初始化
 
@@ -283,7 +284,7 @@ Step 8 总状态：已完成 Phase 8A - 8D。展示层功能闭环已通，视�
 
 开发环境公网入口（ngrok / Cloudflare Tunnel）只是把 `localhost` 暴露给 GitHub 的工具，**不是**正式架构组件，不要写进业务代码。生产入口属于 Step 10。
 
-状态：未开始。下一步从 9A 动手。
+状态：9A / 9B 已完成。下一步是 9C。
 
 #### Phase 9A: GitHub Webhook（验签 + 过滤，不跑 AI）
 
@@ -309,7 +310,7 @@ Webhook **不执行 AI、不等待 Celery、不调用 OpenRouter**。它只做�
 5. 过滤 `pull_request` + `opened` / `synchronize`
 6. 用 GitHub 测试 webhook（含 ping）
 
-状态：未开始
+状态：已完成（ngrok 公网 URL + HMAC；`ping` / `opened` / `synchronize` 返回 2xx；`handled` 仅对 `opened`/`synchronize` 为 true）
 
 #### Phase 9B: 自动 Review Pipeline
 
@@ -335,7 +336,7 @@ GitHub pull_request
 - 前端 60s 轮询 job 状态**保留**：Webhook 替代的是「要不要去 GitHub 拉 PR」，不是「浏览器怎么知道 AI 做完了」
 - 9B 可以暂时「每次 synchronize 都建 job」；重复 job 的抑制放到 9C
 
-状态：未开始
+状态：已完成（push 后 worker 自动 `GET .../files`、`create_review_job`、走现有 `execute_review_job`；webhook HTTP 马上 200，不等 OpenRouter。仓库需事先被该用户 Sync 进 CodeGuard）
 
 #### Phase 9C: Reliability & Idempotency
 
@@ -359,7 +360,7 @@ GitHub App / Installation token 不在本步范围，作为以后的 Version 2�
 
 状态：可选，未开始
 
-Step 9 总状态：未开始，下一阶段是 Phase 9A
+Step 9 总状态：已完成 Phase 9A - 9B。下一步是 Phase 9C（两层幂等）。9D 仍为可选。
 
 ### Step 10: 部署与工程化完善
 
@@ -394,6 +395,8 @@ Step 9 总状态：未开始，下一阶段是 Phase 9A
 - [ ] **Job 选中态** — 针对 Step 8C「在 PR 详情展示 job 状态」：当前靠点 `#id` 选中，不够明显。
 - [ ] **Findings 与 diff 同屏** — 针对 Step 8D「接近 GitHub review 的阅读方式」：现在要跳到另一页才能看行内评论；可做左右分栏或文件页内嵌列表。
 - [ ] **空状态 / 加载 / 密度** — 针对 Step 8B/8C/8D 的列表页：补骨架屏、空状态、失败重试、暗色与基本移动端。
+- [ ] **路由级错误与鉴权边界** — 针对 Step 8A–8D：补共享 authenticated layout、`loading.tsx` / `error.tsx` / `not-found.tsx`，统一处理无效 ID、后端 404 和会话失效，避免每个页面重复认证与泛化错误文案。
+- [ ] **Review 状态反馈** — 针对 Step 8C：创建 job 后自动选中该 job；文件 diff 页也应刷新活跃 job，避免用户停留在文件页时看不到完成状态。
 - [ ] **视觉风格** — 针对 Step 8 展示层：目前是 shadcn 默认件 + 表格，没有品牌和设计 token。可用已安装的 lucide-react 补图标。
 
 #### 可靠性、模型与测试
@@ -403,8 +406,14 @@ Step 9 总状态：未开始，下一阶段是 Phase 9A
 - [ ] **前端轮询间隔** — 针对 Step 8C「轮询 job 状态」：当前 `refetchInterval = 60000`，pending/processing 体感偏慢。可缩短，或后续改 SSE/WebSocket。
 - [ ] **Chunk 路径集成测试** — 针对 Step 6 findings 落库/去重 和 Step 7B worker 执行：大 PR、部分成功、全部失败、路径 fallback 仍主要靠手工。不阻塞 Step 9，但应补进自动化。
 - [ ] **展示层自动化** — 针对 Step 8C/8D：触发 review、选中 job、过滤 findings、无效 `jobId` 显示 not found，目前只有手工步骤。
+- [ ] **API / Webhook 集成测试** — 针对 Step 3、7、9：补 OAuth 鉴权、HMAC/ping、delivery 重放、活跃 job 去重、同步与 review 成功路径测试；当前自动化主要覆盖 Celery task wrapper 的失败路径。
+- [ ] **GitHub API 分页** — 针对 Step 3 的 repositories / pull requests / files 同步：当前单次请求最多取 100 条；必须遍历 GitHub `Link` 分页，避免大型账号、仓库或 PR 静默丢数据。
+- [ ] **Webhook pipeline 重试与失败追踪** — 针对 Step 9B：为 sync PR/files 和创建 job 的后台任务增加瞬时错误重试、退避、最终失败状态与可观测日志，避免 webhook 已返回 2xx 后任务静默丢失。
+- [ ] **Worker 并发执行保护** — 针对 Step 7B/7E：终态 job 已会跳过，但同一 `pending` / `processing` job 仍可能被多个 worker 并发消费；需用数据库原子状态迁移或锁保证同一 job 只有一个执行者。
+- [ ] **Review 查询负载拆分** — 针对 Step 8C：job 历史列表不应长期携带所有 findings；列表返回摘要，选中后再请求 `GET /review-jobs/{id}`，避免历史 job 增长后轮询 payload 持续膨胀。
 - [ ] **Worker 非 root 运行** — 针对 Step 7E 本地 compose 和 Step 10「Worker 部署方案」：当前 Celery worker 以 root 跑，有 SecurityWarning。
 - [ ] **Redis `/health` 在受限网络下失败** — 针对 Step 2「`/health` 健康检查」：校园网等环境 DNS 拦 `upstash.io` 时健康检查失败；review 主路径并不走 Redis。
+- [ ] **配置与迁移工程化** — 针对 Step 2 / Step 10：补不含密钥的 `.env.example`，确保 Alembic autogenerate 导入全部 model，并在 CI 中校验迁移链与 ORM metadata 一致。
 
 #### 产品边界（与 Step 9 的交界，但不替代 webhook）
 
@@ -454,10 +463,14 @@ Step 9 总状态：未开始，下一阶段是 Phase 9A
 - 前端按 job 展示 `result_summary` / findings，支持 severity 与 file 过滤
 - 前端文件 diff（行号 + 按 finding 高亮），无效 `jobId` 显示 not found 而不改用其他 job
 - Review job / PR file 读接口按 `Repository.user_id` 做对象级隔离（缺 IDOR 自动化测试，见 Step 11）
+- `POST /webhooks/github`：原始 body HMAC（`X-Hub-Signature-256`），无 JWT
+- 仅将 `pull_request` 的 `opened` / `synchronize` 入队；`ping` 与其它 action 仍 2xx 且不入队
+- Celery `process_github_pull_request_webhook`：按 `github_repo_id` 找本地 repo 与 owner OAuth token，复用 sync PR / files / `create_review_job` / `execute_review_job_task`
+- 开发环境用 ngrok 把 `localhost:8000` 暴露给 GitHub（非架构组件）
 
-当前已经具备可在浏览器里登录、同步仓库与 PR、触发 AI review、轮询状态并阅读 findings 的完整展示层。对象级 user 隔离已有，但尚未用自动化测试锁住；UI 仍是功能向 MVP。
+当前已经具备手动与自动两条入口：用户可在浏览器里「登录 → sync → Run AI review → 读 findings」；也可 `git push` 后由 webhook 自动建 job 并完成 review。对象级 user 隔离已有，但尚未用自动化测试锁住；同一 PR 连续 push 仍可能创建多个 job（9C）。UI 仍是功能向 MVP。
 
-从路线图角度看，当前已经完成 Step 1 到 Step 8D。下一步是 Step 9（Webhook 自动化）。安全、UI、模型质量与测试债放在 Step 11，不阻塞 Step 9。
+从路线图角度看，当前已经完成 Step 1 到 Step 9B。下一步是 Step 9C（投递幂等 + 活跃 job 去重）。
 
 ## 当前核心数据模型
 
@@ -474,17 +487,18 @@ Step 9 总状态：未开始，下一阶段是 Phase 9A
 
 ## 下一步计划
 
-展示层 MVP 已完成。按优先级推进：
+GitHub webhook 自动 review（9A/9B）已完成。按优先级推进：
 
-1. Step 9：从 9A 开始（公网可达 + HMAC 验签 + 事件过滤，不跑 AI）；9B 接现有 sync/Celery；9C 两层幂等；9D 评论可选
-2. Step 10：部署、监控、CI/CD、非 root worker 等工程化
-3. Step 11：安全测试、UI polish、模型质量与集成测试（可与 9/10 并行，但不作为 9 的前置）
+1. Step 9C：`github_webhook_events.delivery_id` 唯一 + 该 PR 已有 `pending`/`processing` job 则 skip
+2. Step 9D（可选）：findings 写回 GitHub PR 评论
+3. Step 10：部署、监控、CI/CD、非 root worker 等工程化
+4. Step 11：安全测试、UI polish、模型质量与集成测试（可与 9C/10 并行）
 
-chunk 模式的更系统化集成测试已记入 Step 11，不阻塞 webhook。
+chunk 模式的更系统化集成测试已记入 Step 11，不阻塞 9C。
 
 ## 项目状态
 
-当前项目已完成 GitHub 集成、结构化 AI review、异步任务系统，以及前端登录、Repo/PR 浏览、触发 review 与 findings 阅读。用户可以在浏览器里走完「登录 → sync → Run AI review → 点 job 看 findings → 点进文件看行内评论」。下一步是 Step 9A：`POST /webhooks/github` + HMAC 验签 + 只记录 `opened`/`synchronize`，不在 webhook 里跑 AI。
+当前项目已完成 GitHub 集成、结构化 AI review、异步任务、前端展示，以及 webhook 驱动的自动 review。用户既可以手动点 Run AI review，也可以 `git push` 后由 GitHub 通知 CodeGuard 自动 sync files 并创建 review job。下一步是 Step 9C：同一投递不处理两遍，且已有活跃 job 时不再新建。
 
 ## 当前阶段测试计划
 
@@ -505,6 +519,8 @@ Step 7E 的 task 层失败路径已经用自动化测试锁住。Step 8 展示�
 - 前端 PR 详情可触发 review 并轮询 `pending / processing / completed / failed`
 - 点 review job 可展示该 job 的 summary 与 findings，过滤后列表会变
 - 点 finding 可进入对应文件 diff 并定位行号；无效 `jobId` 显示 not found
+- GitHub webhook HMAC 验签：错误签名 401；`ping` 与 `pull_request.synchronize` 返回 200
+- push 到已 sync 仓库的 PR 后，不点 Run AI review 也会自动出现 review job 并可以 `completed`
 
 仍建议补完的测试（Step 11，不阻塞 Step 9）：
 

@@ -10,7 +10,7 @@ from app.schemas.review_job import (
     ReviewJobRead,
 )
 from app.services.review_jobs import (
-    create_review_job,
+    create_review_job_if_no_active,
     get_pull_request_for_user,
     get_review_job_with_findings_for_user,
     list_review_jobs_for_pull_request_for_user,
@@ -44,25 +44,26 @@ async def create_pull_request_review_job(
             detail="Pull request not found",
         )
 
-    review_job = await create_review_job(
+    review_job, created = await create_review_job_if_no_active(
         db=db,
         pull_request=pull_request,
         provider=payload.provider,
         model_name=payload.model_name,
     )
 
-    try:
-        execute_review_job_task.delay(review_job.id)
-    except Exception as exc:
-        review_job.status = ReviewJobStatus.failed
-        review_job.error_message = f"Failed to enqueue review job: {exc}"
-        await db.commit()
-        await db.refresh(review_job)
+    if created:
+        try:
+            execute_review_job_task.delay(review_job.id)
+        except Exception as exc:
+            review_job.status = ReviewJobStatus.failed
+            review_job.error_message = f"Failed to enqueue review job: {exc}"
+            await db.commit()
+            await db.refresh(review_job)
 
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Failed to enqueue review job",
-        ) from exc
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Failed to enqueue review job",
+            ) from exc
 
     review_job_with_findings = await get_review_job_with_findings_for_user(
         db=db,
