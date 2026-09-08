@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status  # pyrigh
 from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 
 from app.api.deps import get_current_user, get_db
+from app.api.rate_limit_deps import limit_pull_request_sync
 from app.models.user import User
 from app.schemas.pull_request import PullRequestRead, PullRequestSyncResponse
 from app.services.github_pull_requests import (
@@ -16,7 +17,11 @@ from app.services.github_pull_requests import (
 router = APIRouter(prefix="/repositories", tags=["pull-requests"])
 
 
-@router.post("/{repository_id}/pr/sync", response_model=PullRequestSyncResponse)
+@router.post(
+    "/{repository_id}/pr/sync",
+    response_model=PullRequestSyncResponse,
+    dependencies=[Depends(limit_pull_request_sync)],
+)
 async def sync_repo_pr(
     repository_id: int,
     request: Request,

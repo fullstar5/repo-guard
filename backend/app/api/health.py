@@ -47,9 +47,9 @@ async def _readiness_response(request: Request) -> JSONResponse:
     """
     Report whether the API can serve database-backed requests.
 
-    PostgreSQL is required and controls the HTTP status. Redis remains optional
-    until rate limiting is enabled, so its outage is reported as degraded
-    without causing the platform to restart an otherwise healthy API process.
+    PostgreSQL is required and controls the HTTP status. Redis protects selected
+    write paths, which fail closed independently; its outage is reported as
+    degraded without restarting an otherwise healthy API process.
     """
     services: dict[str, dict[str, str]] = {}
     postgres_ready = True

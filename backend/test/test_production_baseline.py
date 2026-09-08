@@ -31,6 +31,7 @@ def _settings_values() -> dict[str, object]:
         "open_router_api_key": "openrouter-key",
         "app_public_url": "https://app.example.com",
         "rabbitmq_url": "amqps://user:password@rabbitmq.example.com/vhost",
+        "rate_limit_enabled": True,
     }
 
 
@@ -72,6 +73,20 @@ def test_production_settings_reject_localhost_and_insecure_cookie():
     message = str(exc_info.value)
     assert "FRONTEND_URL must use https" in message
     assert "COOKIE_SECURE must be true" in message
+
+
+def test_production_settings_require_rate_limiting():
+    values = _settings_values()
+    values["rate_limit_enabled"] = False
+
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(
+            _env_file=None,
+            environment="production",
+            **values,
+        )
+
+    assert "RATE_LIMIT_ENABLED must be true" in str(exc_info.value)
 
 
 def test_liveness_does_not_call_external_dependencies():

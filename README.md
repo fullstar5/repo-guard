@@ -414,6 +414,10 @@ FastAPI
 - Webhook delivery 与 review job 幂等继续使用 PostgreSQL，不迁移到 Redis
 - Upstash REST Redis 不作为 Celery broker，RabbitMQ 链路保持不变
 
+状态：实现已完成。后端通过 Upstash REST 的单次原子 `EVAL` 执行固定窗口计数；OAuth 按哈希后的客户端 IP 限制为每 10 分钟 20 次，sync 共享每用户 10 分钟 30 次并增加每对象每分钟 6 次，review 限制为每用户每小时 5 次且每个 PR 每 10 分钟 2 次。超限返回 `429 + Retry-After`，Redis 不可用时受保护路径返回 `503`；普通 GET、health、logout、webhook 和 Celery 链路不依赖限流。所有配额均可通过环境变量调整，生产环境强制 `RATE_LIMIT_ENABLED=true`。后端 24 个自动化测试全部通过，并已使用真实 Upstash 验证第一次请求放行、第二次超限和正数重试时间。
+
+本地开发默认可以设置 `RATE_LIMIT_ENABLED=false` 以避免离线环境阻塞写操作。需要联调真实 Upstash 时改为 `true`，并确认 `UPSTASH_REDIS_REST_URL`、`UPSTASH_REDIS_REST_TOKEN` 可用。`RATE_LIMIT_TRUSTED_PROXY_HOPS` 默认是 `1`；Phase 10C 接入 Vercel rewrite 后，必须根据实际 `X-Forwarded-For` 链验证并调整，不能盲目假定代理层数。
+
 #### Phase 10C: Frontend / Cookie / OAuth
 
 - Vercel 将 `/api/:path*` rewrite 到 Northflank API，浏览器始终使用同源 `/api`
@@ -455,7 +459,7 @@ FastAPI
 - 每个实验设置预算告警和销毁步骤，结束后执行 `terraform destroy`
 - Kubernetes / Terraform 学习成果后续再迁移到正式付费生产方案，不把单节点免费环境描述为高可用生产集群
 
-状态：Phase 10A 实现完成，Docker 构建验证待补。下一步是 Phase 10B（Upstash Redis 分布式限流）
+状态：Phase 10A、10B 实现完成。下一步是 Phase 10C（Vercel rewrite、Cookie 与 OAuth 生产域名）
 
 ### Step 11: 产品化补强（不阻塞 Step 9）
 

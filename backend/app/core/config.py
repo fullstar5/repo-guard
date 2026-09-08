@@ -48,6 +48,22 @@ class Settings(BaseSettings):
     review_max_combined_changes: int = 1000
     review_retry_attempts: int = 3
 
+    # Upstash-backed distributed rate limiting. Local development may disable
+    # it, but production validation requires fail-closed protection.
+    rate_limit_enabled: bool = False
+    rate_limit_timeout_seconds: float = 1.5
+    rate_limit_trusted_proxy_hops: int = 1
+    rate_limit_oauth_requests: int = 20
+    rate_limit_oauth_window_seconds: int = 600
+    rate_limit_sync_user_requests: int = 30
+    rate_limit_sync_user_window_seconds: int = 600
+    rate_limit_sync_object_requests: int = 6
+    rate_limit_sync_object_window_seconds: int = 60
+    rate_limit_review_user_requests: int = 5
+    rate_limit_review_user_window_seconds: int = 3600
+    rate_limit_review_object_requests: int = 2
+    rate_limit_review_object_window_seconds: int = 600
+
 
     # RabbitMQ and celery
     rabbitmq_url: str = "amqp://guest:guest@localhost:5672//"
@@ -77,10 +93,35 @@ class Settings(BaseSettings):
         Local development keeps HTTP and localhost defaults. Production must
         use secure public URLs, secure cookies, and non-development secrets.
         """
+        errors: list[str] = []
+        positive_rate_limit_settings = {
+            "RATE_LIMIT_TIMEOUT_SECONDS": self.rate_limit_timeout_seconds,
+            "RATE_LIMIT_OAUTH_REQUESTS": self.rate_limit_oauth_requests,
+            "RATE_LIMIT_OAUTH_WINDOW_SECONDS": self.rate_limit_oauth_window_seconds,
+            "RATE_LIMIT_SYNC_USER_REQUESTS": self.rate_limit_sync_user_requests,
+            "RATE_LIMIT_SYNC_USER_WINDOW_SECONDS": self.rate_limit_sync_user_window_seconds,
+            "RATE_LIMIT_SYNC_OBJECT_REQUESTS": self.rate_limit_sync_object_requests,
+            "RATE_LIMIT_SYNC_OBJECT_WINDOW_SECONDS": self.rate_limit_sync_object_window_seconds,
+            "RATE_LIMIT_REVIEW_USER_REQUESTS": self.rate_limit_review_user_requests,
+            "RATE_LIMIT_REVIEW_USER_WINDOW_SECONDS": self.rate_limit_review_user_window_seconds,
+            "RATE_LIMIT_REVIEW_OBJECT_REQUESTS": self.rate_limit_review_object_requests,
+            "RATE_LIMIT_REVIEW_OBJECT_WINDOW_SECONDS": self.rate_limit_review_object_window_seconds,
+        }
+        for name, value in positive_rate_limit_settings.items():
+            if value <= 0:
+                errors.append(f"{name} must be greater than zero")
+
+        if self.rate_limit_trusted_proxy_hops < 0:
+            errors.append("RATE_LIMIT_TRUSTED_PROXY_HOPS cannot be negative")
+
         if self.environment != "production":
+            if errors:
+                raise ValueError("; ".join(errors))
             return self
 
-        errors: list[str] = []
+        if not self.rate_limit_enabled:
+            errors.append("RATE_LIMIT_ENABLED must be true in production")
+
         secure_urls = {
             "FRONTEND_URL": self.frontend_url,
             "GITHUB_REDIRECT_URI": self.github_redirect_uri,
