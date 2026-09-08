@@ -1,12 +1,17 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
+from urllib.parse import urlsplit
 
+from pydantic import model_validator  # pyright: ignore[reportMissingImports]
 from pydantic_settings import BaseSettings, SettingsConfigDict  # pyright: ignore[reportMissingImports]
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
+    environment: Literal["development", "test", "production"] = "development"
+
     neon_postgres_url: str
     upstash_redis_rest_url: str
     upstash_redis_rest_token: str
@@ -63,6 +68,54 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @model_validator(mode="after")
+    def validate_production_settings(self) -> "Settings":
+        """
+        Reject unsafe production configuration before the process starts.
+
+        Local development keeps HTTP and localhost defaults. Production must
+        use secure public URLs, secure cookies, and non-development secrets.
+        """
+        if self.environment != "production":
+            return self
+
+        errors: list[str] = []
+        secure_urls = {
+            "FRONTEND_URL": self.frontend_url,
+            "GITHUB_REDIRECT_URI": self.github_redirect_uri,
+            "APP_PUBLIC_URL": self.app_public_url,
+            "UPSTASH_REDIS_REST_URL": self.upstash_redis_rest_url,
+            "OPEN_ROUTER_BASE_URL": self.open_router_base_url,
+        }
+
+        for name, value in secure_urls.items():
+            if urlsplit(value).scheme != "https":
+                errors.append(f"{name} must use https in production")
+
+        if not self.cookie_secure:
+            errors.append("COOKIE_SECURE must be true in production")
+
+        if len(self.jwt_secret_key) < 32:
+            errors.append("JWT_SECRET_KEY must contain at least 32 characters")
+
+        if len(self.github_webhook_secret) < 32:
+            errors.append(
+                "GITHUB_WEBHOOK_SECRET must contain at least 32 characters"
+            )
+
+        database_host = urlsplit(self.neon_postgres_url).hostname
+        if database_host in {"localhost", "127.0.0.1"}:
+            errors.append("NEON_POSTGRES_URL cannot use localhost in production")
+
+        rabbitmq_host = urlsplit(self.rabbitmq_url).hostname
+        if rabbitmq_host in {"localhost", "127.0.0.1", "rabbitmq"}:
+            errors.append("RABBITMQ_URL must use the deployed broker in production")
+
+        if errors:
+            raise ValueError("; ".join(errors))
+
+        return self
 
     @property
     def sqlalchemy_database_url(self) -> str:

@@ -1,7 +1,15 @@
 import logging
 
-from fastapi import APIRouter, HTTPException, Request, status  # pyright: ignore[reportMissingImports]
+from fastapi import (  # pyright: ignore[reportMissingImports]
+    APIRouter,
+    Depends,
+    HTTPException,
+    Request,
+    status,
+)
+from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 
+from app.api.deps import get_db
 from app.core.config import get_settings
 from app.services.github_webhook import (
     log_github_webhook_event,
@@ -9,8 +17,11 @@ from app.services.github_webhook import (
     summarize_github_event,
     verify_github_signature,
 )
+from app.services.github_webhook_events import (
+    delete_github_webhook_event,
+    register_github_webhook_event,
+)
 from app.tasks.github_webhooks import process_github_pull_request_webhook
-
 
 
 router = APIRouter(tags=["webhooks"])
@@ -19,8 +30,14 @@ logger = logging.getLogger(__name__)
 
 
 @router.post("/webhooks/github")
-async def github_webhook(request: Request):
-    """receive github events, verify hmac, log, return 2xx"""
+async def github_webhook(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    verify and register a github delivery, then dispatch supported events
+    AI events and github sync remain outside HTTP request
+    """
     body = await request.body()
     signature = request.headers.get("X-Hub-Signature-256")
     event_name = request.headers.get("X-GitHub-Event")
@@ -55,13 +72,69 @@ async def github_webhook(request: Request):
         payload=payload,
     )
     log_github_webhook_event(summary)
-    # if it's a task that need to be handled, trigger background celery task: github_webhooks.process_github_pull_request_webhook
-    if summary["handled"]:
+
+    # Ping and unsupported events must still return 2xx.
+    if not summary["handled"]:
+        return {
+            "accepted": True,
+            "delivery_id": delivery_id,
+            "event": summary["event"],
+            "action": summary["action"],
+            "handled": False,
+            "duplicate": False,
+            "dispatched": False,
+        }
+
+    if not delivery_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing X-GitHub-Delivery header",
+        )
+
+    # if github delivery already exist
+    is_new_delivery = await register_github_webhook_event(
+        db,
+        delivery_id=delivery_id,
+        event_name=event_name or "unknown",
+        action=summary["action"],
+        github_repo_id=summary["github_repo_id"],
+        pull_request_number=summary["pr_number"],
+    )
+    if not is_new_delivery:
+        logger.info(
+            "Skip duplicate GitHub delivery delivery_id=%s",
+            delivery_id,
+        )
+        return {
+            "accepted": True,
+            "delivery_id": delivery_id,
+            "event": summary["event"],
+            "action": summary["action"],
+            "handled": True,
+            "duplicate": True,
+            "dispatched": False,
+        }
+    
+    try:
         process_github_pull_request_webhook.delay(payload)
+    except Exception as exc:
+        # if rabbitmq publihs failed or enqueue failed
+        await delete_github_webhook_event(db, delivery_id)
+        logger.exception(
+            "Failed to enqueue GitHub delivery delivery_id=%s",
+            delivery_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Failed to enqueue webhook event",
+        ) from exc
+
     return {
         "accepted": True,
-        "delivery_id": summary["delivery_id"],
+        "delivery_id": delivery_id,
         "event": summary["event"],
         "action": summary["action"],
-        "handled": summary["handled"],
+        "handled": True,
+        "duplicate": False,
+        "dispatched": True,
     }

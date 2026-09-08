@@ -9,13 +9,14 @@ from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissing
 from app.core.config import get_settings
 from app.core.database import AsyncSessionLocal
 from app.models.repository import Repository
+from app.models.review_job import ReviewJobStatus
 from app.services.github_pr_files import (
     fetch_github_pull_request_files,
     sync_pull_request_files,
 )
 from app.services.github_pull_requests import sync_pull_requests
 from app.services.github_repositories import list_repo_by_github_repo_id
-from app.services.review_jobs import create_review_job
+from app.services.review_jobs import create_review_job_if_no_active
 from app.tasks.review_jobs import execute_review_job_task
 
 
@@ -69,19 +70,42 @@ async def _sync_and_review_for_repo(
         github_files=github_files,
     )
 
-    review_job = await create_review_job(
+    # check whether have active job before create new job
+    review_job, created = await create_review_job_if_no_active(
         db=db,
         pull_request=pull_request,
         provider="openrouter",
         model_name=settings.open_router_default_model,
     )
-    execute_review_job_task.delay(review_job.id)
-    logger.info(
-            "Webhook created review_job_id=%s local_repo_id=%s pr_number=%s files=%s",
-            review_job.id,
+    if not created:
+        logger.info(
+            "Skip webhook review local_repo_id=%s pr_number=%s: "
+            "active review_job_id=%s status=%s",
             repository.id,
             pull_request.number,
-            len(github_files),
+            review_job.id,
+            review_job.status.value,
+        )
+        return
+
+    try:
+        execute_review_job_task.delay(review_job.id)
+    except Exception as exc:
+        review_job.status = ReviewJobStatus.failed
+        review_job.error_message = f"Failed to enqueue review job: {exc}"
+        await db.commit()
+        logger.exception(
+            "Failed to enqueue webhook review_job_id=%s",
+            review_job.id,
+        )
+        raise
+
+    logger.info(
+        "Webhook created review_job_id=%s local_repo_id=%s pr_number=%s files=%s",
+        review_job.id,
+        repository.id,
+        pull_request.number,
+        len(github_files),
     )
 
 

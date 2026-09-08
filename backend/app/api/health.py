@@ -1,3 +1,5 @@
+import logging
+
 import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -8,6 +10,7 @@ from app.core.database import engine
 
 router = APIRouter(tags=["health"])
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 async def check_postgres() -> dict:
@@ -34,31 +37,48 @@ async def check_redis(http_client: httpx.AsyncClient) -> dict:
     return {"status": "ok" if is_ok else "error"}
 
 
-@router.get("/health")
-async def health_check(request: Request):
+@router.get("/health/live")
+async def liveness_check():
+    """Confirm that the API process is running without calling dependencies."""
+    return {"status": "ok"}
+
+
+async def _readiness_response(request: Request) -> JSONResponse:
+    """
+    Report whether the API can serve database-backed requests.
+
+    PostgreSQL is required and controls the HTTP status. Redis remains optional
+    until rate limiting is enabled, so its outage is reported as degraded
+    without causing the platform to restart an otherwise healthy API process.
+    """
     services: dict[str, dict[str, str]] = {}
-    overall_status = "ok"
+    postgres_ready = True
+    redis_ready = True
 
     try:
         services["postgres"] = await check_postgres()
-    except Exception as exc:
-        overall_status = "error"
-        services["postgres"] = {
-            "status": "error",
-            "detail": str(exc),
-        }
+    except Exception:
+        postgres_ready = False
+        services["postgres"] = {"status": "error"}
+        logger.exception("PostgreSQL readiness check failed")
 
     try:
         http_client: httpx.AsyncClient = request.app.state.http_client
         services["redis"] = await check_redis(http_client)
-    except Exception as exc:
-        overall_status = "error"
-        services["redis"] = {
-            "status": "error",
-            "detail": str(exc),
-        }
+    except Exception:
+        redis_ready = False
+        services["redis"] = {"status": "error"}
+        logger.exception("Redis readiness check failed")
 
-    status_code = 200 if overall_status == "ok" else 503
+    if not postgres_ready:
+        overall_status = "error"
+        status_code = 503
+    elif not redis_ready:
+        overall_status = "degraded"
+        status_code = 200
+    else:
+        overall_status = "ok"
+        status_code = 200
 
     return JSONResponse(
         status_code=status_code,
@@ -67,3 +87,9 @@ async def health_check(request: Request):
             "services": services,
         },
     )
+
+
+@router.get("/health/ready")
+async def readiness_check(request: Request):
+    """Expose dependency readiness for deployment probes."""
+    return await _readiness_response(request)

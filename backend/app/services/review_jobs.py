@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx  # pyright: ignore[reportMissingImports]
 
-from sqlalchemy import select, delete  # pyright: ignore[reportMissingImports]
+from sqlalchemy import delete, select  # pyright: ignore[reportMissingImports]
 from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 from sqlalchemy.orm import selectinload  # pyright: ignore[reportMissingImports]
 
@@ -25,6 +25,13 @@ from app.services.review_provider import ReviewFindingDraft, ReviewResult
 # pull PR and PR files from database and create/execute review jobs, and store jobs and results in database 
 settings = get_settings()
 logger = logging.getLogger(__name__)
+
+ACTIVE_REVIEW_JOB_STATUSES = (
+    ReviewJobStatus.pending,
+    ReviewJobStatus.processing,
+)
+
+
 
 async def get_pull_request_for_user(
     db: AsyncSession,
@@ -211,6 +218,58 @@ async def create_review_job(
     await db.refresh(review_job)
 
     return review_job
+
+
+
+async def create_review_job_if_no_active(
+    db: AsyncSession,
+    pull_request: PullRequest,
+    provider: str,
+    model_name: str,
+) -> tuple[ReviewJob, bool]:
+    """
+    return existing active job or create new one
+    """
+
+    locked_pull_request_result = await db.execute(
+        select(PullRequest).where(PullRequest.id == pull_request.id).with_for_update()
+    )
+    locked_pull_request = locked_pull_request_result.scalar_one_or_none()
+
+    if locked_pull_request is None:
+        raise ValueError(
+            f"Pull request {pull_request.id} no longer exists"
+        )
+
+    active_job_result = await db.execute(
+        select(ReviewJob)
+        .where(
+            ReviewJob.pull_request_id == locked_pull_request.id,
+            ReviewJob.status.in_(ACTIVE_REVIEW_JOB_STATUSES),
+        )
+        .order_by(ReviewJob.created_at.desc())
+        .limit(1)
+    )
+    active_job = active_job_result.scalar_one_or_none()
+
+    # if one active job already exist
+    if active_job is not None:
+        logger.info(
+            "Reuse active review_job_id=%s pull_request_id=%s status=%s",
+            active_job.id,
+            locked_pull_request.id,
+            active_job.status.value,
+        )
+        return active_job, False
+
+    review_job = await create_review_job(
+        db=db,
+        pull_request=locked_pull_request,
+        provider=provider,
+        model_name=model_name,
+    )
+    return review_job, True
+
 
 
 async def execute_review_job(

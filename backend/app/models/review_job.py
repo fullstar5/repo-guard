@@ -1,7 +1,17 @@
 from datetime import datetime
 from enum import Enum as PyEnum
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text, func
+from sqlalchemy import (
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    func,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -18,6 +28,18 @@ class ReviewJobStatus(str, PyEnum):
 
 class ReviewJob(Base):
     __tablename__ = "review_jobs"
+
+    # Preserve terminal history while allowing only one active job per PR.
+    __table_args__ = (
+        Index(
+            "uq_review_jobs_active_pull_request",
+            "pull_request_id",
+            unique=True,
+            postgresql_where=text(
+                "status IN ('pending', 'processing')"
+            ),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     pull_request_id: Mapped[int] = mapped_column(
