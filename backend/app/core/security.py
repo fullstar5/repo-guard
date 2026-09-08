@@ -2,8 +2,8 @@
 
 from datetime import datetime, timedelta, timezone
 
-import jwt
-from fastapi import HTTPException, status
+import jwt  # pyright: ignore[reportMissingImports]
+from fastapi import HTTPException, status  # pyright: ignore[reportMissingImports]
 
 from app.core.config import get_settings
 

@@ -1,9 +1,9 @@
 import logging
 
-import httpx
-from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
-from sqlalchemy import text
+import httpx  # pyright: ignore[reportMissingImports]
+from fastapi import APIRouter, Request  # pyright: ignore[reportMissingImports]
+from fastapi.responses import JSONResponse  # pyright: ignore[reportMissingImports]
+from sqlalchemy import text  # pyright: ignore[reportMissingImports]
 
 from app.core.config import get_settings
 from app.core.database import engine

@@ -1,6 +1,6 @@
-from sqlalchemy import delete
-from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import delete  # pyright: ignore[reportMissingImports]
+from sqlalchemy.dialects.postgresql import insert  # pyright: ignore[reportMissingImports]
+from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 
 from app.models.github_webhook_event import GitHubWebhookEvent
 

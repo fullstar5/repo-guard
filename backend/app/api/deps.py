@@ -1,9 +1,9 @@
 from collections.abc import AsyncGenerator
 
-from fastapi import Depends, HTTPException, Request, status
-from fastapi.security import OAuth2PasswordBearer
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import Depends, HTTPException, Request, status  # pyright: ignore[reportMissingImports]
+from fastapi.security import OAuth2PasswordBearer  # pyright: ignore[reportMissingImports]
+from sqlalchemy import select  # pyright: ignore[reportMissingImports]
+from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 
 from app.core.config import get_settings
 from app.core.database import AsyncSessionLocal

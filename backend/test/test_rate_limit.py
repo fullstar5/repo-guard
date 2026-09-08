@@ -1,8 +1,8 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-from fastapi import HTTPException
+import pytest  # pyright: ignore[reportMissingImports]
+from fastapi import HTTPException  # pyright: ignore[reportMissingImports]
 
 from app.api.rate_limit_deps import (
     _enforce,

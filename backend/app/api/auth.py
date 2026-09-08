@@ -1,10 +1,10 @@
 from secrets import token_urlsafe
 
-import httpx
+import httpx  # pyright: ignore[reportMissingImports]
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from fastapi.responses import RedirectResponse
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status  # pyright: ignore[reportMissingImports]
+from fastapi.responses import RedirectResponse  # pyright: ignore[reportMissingImports]
+from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 
 from app.api.deps import get_current_user, get_db
 from app.api.rate_limit_deps import limit_oauth_requests
