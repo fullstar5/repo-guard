@@ -7,6 +7,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db
+from app.api.rate_limit_deps import limit_oauth_requests
 from app.core.config import get_settings
 from app.models.user import User
 from app.schemas.auth import AuthUserRead, GitHubOAuthCallbackResponse
@@ -24,7 +25,10 @@ from app.services.users import upsert_github_user
 router = APIRouter(prefix="/auth", tags=["auth"])
 settings = get_settings()
 
-@router.get("/github/login")
+@router.get(
+    "/github/login",
+    dependencies=[Depends(limit_oauth_requests)],
+)
 async def github_login() -> RedirectResponse:
     state = token_urlsafe(32)
     authorize_url = build_github_authorize_url(state)
@@ -42,7 +46,10 @@ async def github_login() -> RedirectResponse:
     return response
 
 
-@router.get("/github/callback")
+@router.get(
+    "/github/callback",
+    dependencies=[Depends(limit_oauth_requests)],
+)
 async def github_callback(
     code: str,
     state: str,

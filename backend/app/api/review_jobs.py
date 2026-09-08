@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status  # pyright: ignore
 from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 
 from app.api.deps import get_current_user, get_db
+from app.api.rate_limit_deps import limit_review_creation
 from app.models.review_job import ReviewJobStatus
 from app.models.user import User
 from app.schemas.review_job import (
@@ -24,6 +25,7 @@ router = APIRouter(tags=["review-jobs"])
     "/pull-requests/{pull_request_id}/review-jobs",
     response_model=ReviewJobRead,
     status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(limit_review_creation)],
 )
 async def create_pull_request_review_job(
     pull_request_id: int,
