@@ -2,12 +2,6 @@ import axios from "axios";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "/api";
 
-if (!API_URL) {
-    throw new Error(
-        "NEXT_PUBLIC_API_URL is not set. Add it to frontend/.env.local and restart next dev.",
-    );
-}
-
 export const api = axios.create({
     baseURL: API_URL,
     withCredentials: true,
