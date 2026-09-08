@@ -1,5 +1,5 @@
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select  # pyright: ignore[reportMissingImports]
+from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 
 from app.models.user import User
 from app.schemas.auth import GitHubUserProfile, GitHubAccessTokenResponse

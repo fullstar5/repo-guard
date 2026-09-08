@@ -1,4 +1,4 @@
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine, async_sessionmaker, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine, async_sessionmaker, AsyncSession  # pyright: ignore[reportMissingImports]
 from app.core.config import get_settings
 
 settings = get_settings()

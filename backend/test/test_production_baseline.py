@@ -2,8 +2,8 @@ import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-from pydantic import ValidationError
+import pytest  # pyright: ignore[reportMissingImports]
+from pydantic import ValidationError  # pyright: ignore[reportMissingImports]
 
 from app.api.health import _readiness_response, liveness_check
 from app.core.config import Settings

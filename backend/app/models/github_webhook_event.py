@@ -1,7 +1,7 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Integer, String, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import BigInteger, DateTime, Integer, String, func  # pyright: ignore[reportMissingImports]
+from sqlalchemy.orm import Mapped, mapped_column  # pyright: ignore[reportMissingImports]
 
 from app.models.base import Base
 

@@ -1,7 +1,7 @@
 from urllib.parse import urlencode
 
-import httpx
-from fastapi import HTTPException, status
+import httpx  # pyright: ignore[reportMissingImports]
+from fastapi import HTTPException, status  # pyright: ignore[reportMissingImports]
 
 from app.core.config import get_settings
 from app.schemas.auth import GitHubAccessTokenResponse, GitHubEmail, GitHubUserProfile
