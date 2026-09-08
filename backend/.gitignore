@@ -56,9 +56,6 @@ pip-delete-this-directory.txt
 *.log
 logs/
 
-# Alembic
-alembic.ini
-
 # vercel
 .vercel
 
