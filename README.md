@@ -28,7 +28,7 @@ CodeGuard AI 是一个面向开发者的 AI Code Review SaaS 项目。它的目�
 - Async / Infra: RabbitMQ（本地 Compose + 生产 CloudAMQP Little Lemur）, Celery Worker；本地 Celery Beat，生产用 Northflank Cron 替代 Beat
 - Local Orchestration: Docker Compose（api + worker + beat + rabbitmq）
 - Hosting: Vercel Hobby（前端）、Northflank Developer Sandbox（API + worker + cron）
-- CI/CD: Github Actions（Step 10E，未开始）
+- CI/CD: GitHub Actions（PR 门禁已接入；`main` 将后端镜像推到 GHCR。Northflank 仍从 Git 构建，见 10E-3）
 
 Architecture 最终完成的流程：Github -> Webhook -> BackendAPI -> RabbitMQ -> Celery -> OpenRouter -> Postgres -> Frontend
 
@@ -63,7 +63,7 @@ README 原定前端栈与当前使用情况：
 
 ## 项目路线图
 
-整个项目可以分为 11 个主要步骤。每一步都对应一个明确的工程目标，而不是为了堆技术而堆技术。Step 1–8 已完成功能闭环；Step 9A–9C 已完成 webhook 自动 review 与两层幂等；9D 评论暂缓；Step 10A–10D 已完成 0 成本部署（Vercel + Northflank + CloudAMQP）；下一步是 Phase 10E（CI/CD）；Step 11 是产品化补强。
+整个项目可以分为 11 个主要步骤。每一步都对应一个明确的工程目标，而不是为了堆技术而堆技术。Step 1–8 已完成功能闭环；Step 9A–9C 已完成 webhook 自动 review 与两层幂等；9D 评论暂缓；Step 10A–10D 已完成 0 成本部署（Vercel + Northflank + CloudAMQP）；10E 已完成 CI 门禁与 GHCR 镜像推送；下一步是 Northflank 先迁移再部署同一 digest；Step 11 是产品化补强。
 
 ### Step 1: 项目初始化
 
@@ -445,12 +445,14 @@ FastAPI
 #### Phase 10E: CI/CD
 
 - GitHub Actions CI：后端 pytest、Alembic head / migration 检查、前端 lint / typecheck / build、Docker build
-- 合并到 `main` 后只构建一次 backend 镜像，以 Git commit SHA 标记并推送 GHCR
-- 先运行 Northflank migration Job：`alembic upgrade head`
-- migration 成功后，API 与 worker 部署同一个 immutable image digest
+- 合并到 `main` 且 CI 全绿后，将后端镜像推到 `ghcr.io/<owner>/repo-guard-backend:<git-sha>` 和 `:main`
+- 先运行 Northflank migration Job：`alembic upgrade head`（尚未接入；占用第 2 个 Job 名额）
+- migration 成功后，API 与 worker 部署同一个 immutable image digest（尚未接入；当前 Combined 仍从 Git 构建）
 - migration 失败立即停止发布，不更新 API / worker
 - Northflank 使用 Template / API / Release Flow 管理资源；当前 Terraform provider 无法完整管理 Service / Job / Addon，不用 `local-exec` 伪装完整 IaC
 - 前端由 Vercel Git Integration 发布；PR 生成 Preview，`main` 发布 Production
+
+状态：CI 门禁与 GHCR 推送已完成。PR 不推镜像。生产运行时尚未改吃 GHCR。
 
 #### Phase 10F: Observability / Rollback / Zero-Cost Guardrails
 
@@ -467,7 +469,7 @@ FastAPI
 - 每个实验设置预算告警和销毁步骤，结束后执行 `terraform destroy`
 - Kubernetes / Terraform 学习成果后续再迁移到正式付费生产方案，不把单节点免费环境描述为高可用生产集群
 
-状态：Phase 10A–10D 已完成。下一步是 Phase 10E（GitHub Actions CI、不可变镜像、先迁移再部署 API/worker）。
+状态：Phase 10A–10D 已完成。10E 已完成 CI 与 GHCR 推送。下一步是让 Northflank 先跑 migrate Job，再把 API/worker 换成同一 GHCR digest。
 
 ### Step 11: 产品化补强（不阻塞 Step 9）
 
@@ -579,7 +581,7 @@ FastAPI
 
 当前已经具备手动与自动两条入口：用户可在浏览器里「登录 → sync → Run AI review → 读 findings」；GitHub webhook 也可入队并走同一条 AI pipeline。9C 已阻止同一 delivery 重放和同一 PR 的活跃 job 重复创建。生产上手动 review 与 webhook Redeliver 已通；push 触发自动 review 仍待补测。对象级 user 隔离已有但尚未用自动化测试锁住；UI 仍是功能向 MVP。
 
-从路线图角度看，当前已经完成 Step 1 到 Step 9C，以及 Step 10A–10D。9D 评论回写暂缓。下一步是 Phase 10E（CI/CD）。
+从路线图角度看，当前已经完成 Step 1 到 Step 9C、Step 10A–10D，以及 10E 的 CI / GHCR 推送。9D 评论回写暂缓。下一步是 Northflank 按 digest 先迁移再部署。
 
 ## 当前核心数据模型
 
@@ -599,7 +601,7 @@ FastAPI
 
 GitHub webhook 自动 review、9C 两层幂等，以及 10A–10D 的 0 成本部署已经完成。按优先级推进：
 
-1. Step 10E：GitHub Actions CI、以 commit SHA 标记的不可变后端镜像、先 `alembic upgrade head` 再发布 API/worker；前端继续走 Vercel Git Integration
+1. Step 10E 剩余：Northflank migrate Job + API/worker 改吃 GHCR 同一 digest；前端继续走 Vercel Git Integration
 2. Step 10F：结构化日志、回滚与免费额度护栏
 3. Step 11：安全测试、UI polish、模型质量与集成测试（可与 10E/10F 并行）
 4. Step 9D（可选、暂缓）：findings 写回 GitHub PR 评论
@@ -609,7 +611,7 @@ chunk 模式的更系统化集成测试已记入 Step 11，不阻塞 CI/CD。
 
 ## 项目状态
 
-当前项目已完成 GitHub 集成、结构化 AI review、异步任务、前端展示、webhook 驱动的自动 review、delivery/active job 两层幂等，以及 Vercel + Northflank + CloudAMQP 的 0 成本部署。9D GitHub 评论回写暂缓。下一步是 Phase 10E：把发布从控制台手工构建，升级为可重复的 CI/CD（测试、迁移、不可变镜像）。
+当前项目已完成 GitHub 集成、结构化 AI review、异步任务、前端展示、webhook 驱动的自动 review、delivery/active job 两层幂等，以及 Vercel + Northflank + CloudAMQP 的 0 成本部署。9D GitHub 评论回写暂缓。10E 已有 PR 门禁，合入 `main` 后会把后端镜像推到 GHCR。下一步是让 Northflank 先迁移再部署该镜像，而不是继续从 Git 各编一份。
 
 ## 当前阶段测试计划
 
