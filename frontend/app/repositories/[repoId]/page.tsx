@@ -7,6 +7,7 @@ import { isAxiosError } from "axios";
 
 import { AppHeader } from "@/components/app-header";
 import { Button } from "@/components/ui/button";
+import { authMeQueryOptions, isInitialAuthPending } from "@/lib/auth-session";
 import {
   Table,
   TableBody,
@@ -16,7 +17,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
-  getCurrentUser,
   getGitHubLoginUrl,
   listPullRequests,
   syncPullRequests,
@@ -27,10 +27,7 @@ export default function RepositoryPullRequestsPage() {
   const repositoryId = Number(params.repoId);
   const queryClient = useQueryClient();
 
-  const meQuery = useQuery({
-    queryKey: ["auth", "me"],
-    queryFn: getCurrentUser,
-  });
+  const meQuery = useQuery(authMeQueryOptions);
 
   const prsQuery = useQuery({
     queryKey: ["repositories", repositoryId, "pull-requests"],
@@ -53,7 +50,7 @@ export default function RepositoryPullRequestsPage() {
     isAxiosError(meQuery.error) &&
     meQuery.error.response?.status === 401;
 
-  if (meQuery.isLoading) {
+  if (isInitialAuthPending(meQuery)) {
     return (
       <main className="flex min-h-screen items-center justify-center">
         <p className="text-sm text-zinc-500">Loading session...</p>

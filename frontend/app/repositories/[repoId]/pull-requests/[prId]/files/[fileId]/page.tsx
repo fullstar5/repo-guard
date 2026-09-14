@@ -11,12 +11,12 @@ import { DiffView, findingsToHighlights } from "@/components/diff-view";
 import { SeverityBadge } from "@/components/review-findings";
 import { Button } from "@/components/ui/button";
 import {
-  getCurrentUser,
   getGitHubLoginUrl,
   getPullRequest,
   getPullRequestFile,
   listReviewJobs,
 } from "@/lib/api";
+import { authMeQueryOptions, isInitialAuthPending } from "@/lib/auth-session";
 import {
   findingLocationLabel,
   findingsForFile,
@@ -35,10 +35,7 @@ export default function PullRequestFilePage() {
     Number.isFinite(pullRequestId) &&
     Number.isFinite(fileId);
 
-  const meQuery = useQuery({
-    queryKey: ["auth", "me"],
-    queryFn: getCurrentUser,
-  });
+  const meQuery = useQuery(authMeQueryOptions);
 
   const prQuery = useQuery({
     queryKey: ["pull-requests", pullRequestId],
@@ -84,7 +81,7 @@ export default function PullRequestFilePage() {
     isAxiosError(meQuery.error) &&
     meQuery.error.response?.status === 401;
 
-  if (meQuery.isLoading) {
+  if (isInitialAuthPending(meQuery)) {
     return (
       <main className="flex min-h-screen items-center justify-center">
         <p className="text-sm text-zinc-500">Loading session...</p>

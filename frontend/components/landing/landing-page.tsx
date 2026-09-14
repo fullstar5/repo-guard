@@ -1,35 +1,10 @@
 "use client";
 
+import { ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import styles from "./landing.module.css";
 import { ProductCarousel } from "./product-carousel";
-
-function ShieldMark() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      className="size-5"
-      fill="none"
-      aria-hidden="true"
-    >
-      <path
-        d="M12 2.6 20 5.6v6.2c0 5.05-3.3 8.55-8 9.7-4.7-1.15-8-4.65-8-9.7V5.6l8-3Z"
-        fill="rgba(34,211,238,0.12)"
-        stroke="#22d3ee"
-        strokeWidth="1.5"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M8.4 12.1 11 14.7l4.7-5.2"
-        stroke="#22d3ee"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
 
 function GitHubMark() {
   return (
@@ -69,7 +44,7 @@ export function LandingPage({ loginUrl }: { loginUrl: string }) {
 
       <div className={styles.frame}>
         <header className={styles.brand}>
-          <ShieldMark />
+          <ShieldCheck className="size-5 text-[#22d3ee]" strokeWidth={1.75} aria-hidden="true" />
           <span className="text-sm font-medium tracking-tight text-[#fafafa]">
             CodeGuard AI
           </span>

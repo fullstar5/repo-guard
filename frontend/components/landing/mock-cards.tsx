@@ -1,3 +1,4 @@
+import { File } from "lucide-react";
 import type { ReactNode } from "react";
 
 import styles from "./landing.module.css";
@@ -40,7 +41,7 @@ export function ReviewMockCard() {
         </span>
       </div>
 
-      <div className="relative mx-4 overflow-hidden rounded-[8px] border border-[#3f3f46] bg-[#09090b] font-mono text-[11px] leading-5">
+      <div className="relative mx-4 overflow-hidden rounded-[8px] border border-[#3f3f46] bg-[#09090b] font-mono text-[12px] leading-5">
         <div className="absolute inset-y-0 left-0 w-[3px] bg-[#22d3ee]" />
         <div className="px-3 py-2 text-[#a1a1aa]">
           <div>
@@ -128,8 +129,8 @@ export function FilesMockCard() {
             key={file.name}
             className="flex items-center justify-between gap-3 px-3 py-2"
           >
-            <span className="flex min-w-0 items-center gap-2 text-[12px] text-[#e4e4e7]">
-              <FileGlyph />
+            <span className="flex min-w-0 items-center gap-2 text-[13px] text-[#e4e4e7]">
+              <File className="size-3.5 shrink-0 text-[#a1a1aa]" aria-hidden="true" />
               <span className="truncate font-mono">{file.name}</span>
             </span>
             <span className="shrink-0 font-mono text-[11px] tabular-nums">
@@ -226,23 +227,5 @@ export function JobsMockCard() {
         })}
       </ul>
     </MockCard>
-  );
-}
-
-function FileGlyph() {
-  return (
-    <svg
-      viewBox="0 0 16 16"
-      className="size-3.5 shrink-0 text-[#71717a]"
-      fill="none"
-      aria-hidden="true"
-    >
-      <path
-        d="M4.5 2.5h5l3 3V13a.5.5 0 0 1-.5.5h-7.5a.5.5 0 0 1-.5-.5V3a.5.5 0 0 1 .5-.5Z"
-        stroke="currentColor"
-        strokeWidth="1.2"
-      />
-      <path d="M9.5 2.5V6H13" stroke="currentColor" strokeWidth="1.2" />
-    </svg>
   );
 }

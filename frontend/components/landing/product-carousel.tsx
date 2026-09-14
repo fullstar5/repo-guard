@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { motion } from "motion/react";
 
 import styles from "./landing.module.css";
 import {
@@ -15,14 +16,23 @@ const SLIDES = [
   { id: "jobs", label: "Jobs", Card: JobsMockCard },
 ] as const;
 
+const COUNT = SLIDES.length;
 const AUTO_MS = 4500;
-const RADIUS = 280;
-const TILT = 38;
+const IDLE_AFTER_DRAG_MS = 2200;
+const PX_PER_SLOT = 240;
+const RADIUS = 300;
+const TILT = 30;
+const DRAG_CLICK_PX = 8;
 
-function relativeSlot(index: number, active: number) {
-  let rel = (index - active) % SLIDES.length;
-  if (rel < 0) rel += SLIDES.length;
-  if (rel === SLIDES.length - 1) rel = -1;
+function wrapIndex(index: number) {
+  return ((index % COUNT) + COUNT) % COUNT;
+}
+
+function wrapRel(index: number, slot: number) {
+  let rel = index - slot;
+  const half = COUNT / 2;
+  while (rel > half) rel -= COUNT;
+  while (rel < -half) rel += COUNT;
   return rel;
 }
 
@@ -31,18 +41,20 @@ function slideStyle(rel: number, compact: boolean) {
     return undefined;
   }
 
-  const angle = rel * (Math.PI / 3.05);
-  const x = Math.sin(angle) * RADIUS;
-  const z = Math.cos(angle) * RADIUS - RADIUS * 0.38;
-  const rotateY = rel * -TILT;
-  const scale = rel === 0 ? 1 : 0.84;
-  const opacity = rel === 0 ? 1 : 0.48;
-  const brightness = rel === 0 ? 1 : 0.68;
+  const abs = Math.abs(rel);
+  const front = abs < 0.04;
+  const angle = rel * (Math.PI / 3.1);
+  const x = Math.round(Math.sin(angle) * RADIUS);
+  const z = front ? 0 : Math.round(Math.cos(angle) * RADIUS - RADIUS * 0.42);
+  const rotateY = front ? 0 : rel * -TILT;
+  const opacity = front ? 1 : 0.78 + 0.1 * Math.max(0, 1 - abs);
 
   return {
-    transform: `translate(-50%, -50%) translateX(${x}px) translateZ(${z}px) rotateY(${rotateY}deg) scale(${scale})`,
+    transform: front
+      ? "translate(-50%, -50%)"
+      : `translate(-50%, -50%) translate3d(${x}px, 0, ${z}px) rotateY(${rotateY.toFixed(2)}deg)`,
     opacity,
-    filter: `brightness(${brightness})`,
+    zIndex: front ? 4 : Math.max(1, Math.round((1 - abs) * 3)),
   };
 }
 
@@ -60,62 +72,106 @@ function useCompactCarousel() {
   return compact;
 }
 
+type PanOffset = {
+  offset: { x: number };
+  velocity: { x: number };
+};
+
 export function ProductCarousel({ reducedMotion }: { reducedMotion: boolean }) {
   const [active, setActive] = useState(0);
-  const [paused, setPaused] = useState(false);
+  const [dragSlots, setDragSlots] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const [autoDelay, setAutoDelay] = useState(AUTO_MS);
+  const draggedRef = useRef(false);
   const compact = useCompactCarousel();
+  const slot = active + dragSlots;
 
   const goTo = useCallback((index: number) => {
-    setActive(((index % SLIDES.length) + SLIDES.length) % SLIDES.length);
+    setActive(wrapIndex(index));
+    setDragSlots(0);
+    setAutoDelay(AUTO_MS);
   }, []);
 
   useEffect(() => {
-    if (reducedMotion || paused) return;
-    const id = window.setInterval(() => {
-      setActive((current) => (current + 1) % SLIDES.length);
-    }, AUTO_MS);
-    return () => window.clearInterval(id);
-  }, [reducedMotion, paused, active]);
+    if (reducedMotion || dragging) return;
+    const id = window.setTimeout(() => {
+      setActive((current) => wrapIndex(current + 1));
+      setAutoDelay(AUTO_MS);
+    }, autoDelay);
+    return () => window.clearTimeout(id);
+  }, [active, autoDelay, dragging, reducedMotion]);
+
+  function onPanStart() {
+    draggedRef.current = false;
+    setDragging(true);
+  }
+
+  function onPan(_event: PointerEvent, info: PanOffset) {
+    if (Math.abs(info.offset.x) > DRAG_CLICK_PX) {
+      draggedRef.current = true;
+    }
+    setDragSlots(-info.offset.x / PX_PER_SLOT);
+  }
+
+  function onPanEnd(_event: PointerEvent, info: PanOffset) {
+    const projected =
+      active - info.offset.x / PX_PER_SLOT - info.velocity.x / 900;
+    const next = wrapIndex(Math.round(projected));
+    setDragSlots(0);
+    setDragging(false);
+    setActive(next);
+    setAutoDelay(draggedRef.current ? IDLE_AFTER_DRAG_MS : AUTO_MS);
+  }
+
+  function onCardActivate(index: number) {
+    if (draggedRef.current) return;
+    goTo(index);
+  }
 
   return (
-    <div
-      className={styles.scene}
-      onMouseEnter={() => setPaused(true)}
-      onMouseLeave={() => setPaused(false)}
-      onFocusCapture={() => setPaused(true)}
-      onBlurCapture={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-          setPaused(false);
-        }
-      }}
-    >
-      <div
-        className={`${styles.stage} ${compact ? styles.stageCompact : ""}`}
+    <div className={styles.scene}>
+      <motion.div
+        className={`${styles.stage} ${compact ? styles.stageCompact : ""} ${
+          dragging ? styles.stageDragging : ""
+        }`}
         id="sample-review"
         role="region"
         aria-roledescription="carousel"
-        aria-label="Product preview"
+        aria-label="Product preview. Drag or swipe to rotate."
+        tabIndex={0}
+        onPanStart={onPanStart}
+        onPan={onPan}
+        onPanEnd={onPanEnd}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowRight") {
+            event.preventDefault();
+            goTo(active + 1);
+          } else if (event.key === "ArrowLeft") {
+            event.preventDefault();
+            goTo(active - 1);
+          }
+        }}
       >
         {SLIDES.map((slide, index) => {
-          const rel = relativeSlot(index, active);
-          const isFront = rel === 0;
+          const rel = wrapRel(index, slot);
+          const isFront = Math.abs(rel) < 0.45;
           return (
-            <button
+            <div
               key={slide.id}
-              type="button"
-              className={`${styles.slide} ${isFront ? styles.slideFront : styles.slideSide} ${compact ? styles.slideCompact : ""} appearance-none border-0 bg-transparent p-0 text-left`}
+              className={`${styles.slide} ${isFront ? styles.slideFront : styles.slideSide} ${
+                compact ? styles.slideCompact : ""
+              } ${dragging ? styles.slideDragging : ""}`}
               style={slideStyle(rel, compact)}
               hidden={compact && !isFront}
-              tabIndex={isFront ? 0 : -1}
+              aria-hidden={!isFront}
               aria-label={`${slide.label} preview`}
-              aria-current={isFront ? "true" : undefined}
-              onClick={() => goTo(index)}
+              onClick={() => onCardActivate(index)}
             >
               <slide.Card />
-            </button>
+            </div>
           );
         })}
-      </div>
+      </motion.div>
 
       <div className={styles.dots} role="tablist" aria-label="Preview slides">
         {SLIDES.map((slide, index) => (
@@ -125,7 +181,7 @@ export function ProductCarousel({ reducedMotion }: { reducedMotion: boolean }) {
             className={styles.dot}
             role="tab"
             aria-label={slide.label}
-            aria-current={index === active ? "true" : undefined}
+            aria-current={index === wrapIndex(Math.round(slot)) ? "true" : undefined}
             onClick={() => goTo(index)}
           />
         ))}

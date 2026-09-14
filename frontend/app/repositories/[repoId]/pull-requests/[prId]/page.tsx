@@ -9,6 +9,7 @@ import { AppHeader } from "@/components/app-header";
 import { ReviewFindingsPanel } from "@/components/review-findings";
 import { Button } from "@/components/ui/button";
 import { pickSelectedReviewJob } from "@/lib/review-findings";
+import { authMeQueryOptions, isInitialAuthPending } from "@/lib/auth-session";
 import {
   Table,
   TableBody,
@@ -19,7 +20,6 @@ import {
 } from "@/components/ui/table";
 import {
   createReviewJob,
-  getCurrentUser,
   getGitHubLoginUrl,
   getPullRequest,
   listPullRequestFiles,
@@ -43,10 +43,7 @@ export default function PullRequestReviewPage() {
   const idsReady = Number.isFinite(repositoryId) && Number.isFinite(pullRequestId);
   const jobIdParam = searchParams.get("jobId");
 
-  const meQuery = useQuery({
-    queryKey: ["auth", "me"],
-    queryFn: getCurrentUser,
-  });
+  const meQuery = useQuery(authMeQueryOptions);
 
   const prQuery = useQuery({
     queryKey: ["pull-requests", pullRequestId],
@@ -97,7 +94,7 @@ export default function PullRequestReviewPage() {
   const selectedJobNotFound =
     jobIdParam != null && jobsQuery.isSuccess && selectedJob == null;
 
-  if (meQuery.isLoading) {
+  if (isInitialAuthPending(meQuery)) {
     return (
       <main className="flex min-h-screen items-center justify-center">
         <p className="text-sm text-zinc-500">Loading session...</p>
