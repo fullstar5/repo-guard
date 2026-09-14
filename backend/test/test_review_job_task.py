@@ -5,7 +5,7 @@ import pytest  # pyright: ignore[reportMissingImports]
 from billiard.exceptions import SoftTimeLimitExceeded  # pyright: ignore[reportMissingImports]
 
 from app.tasks.review_jobs import execute_review_job_task, mark_abandoned_jobs
-
+from app.services.review_jobs import _format_review_job_error
 
 def test_soft_timeout_persists_failed_status():
     with (
@@ -57,3 +57,15 @@ def test_abandoned_jobs_task_calls_service():
 
         reclaim.assert_awaited_once()
         assert result == {"cleaned": 2}
+
+
+def test_format_review_job_error_timeout_is_not_empty():
+    message = _format_review_job_error(TimeoutError())
+    assert message
+    assert "timed out" in message.lower()
+
+
+    
+def test_format_review_job_error_keeps_explicit_message():
+    message = _format_review_job_error(ValueError("model returned empty content"))
+    assert message == "model returned empty content"
