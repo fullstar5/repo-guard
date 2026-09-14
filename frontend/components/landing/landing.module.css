@@ -29,26 +29,26 @@
 
 .sweep {
   position: absolute;
-  top: 42%;
-  left: 58%;
-  width: 150vmax;
-  height: 150vmax;
+  top: 46%;
+  left: 62%;
+  width: 160vmax;
+  height: 160vmax;
   translate: -50% -50%;
   background: conic-gradient(
-    from 210deg at 50% 50%,
+    from 180deg at 50% 50%,
     transparent 0deg,
-    rgb(34 211 238 / 0.2) 55deg,
-    transparent 110deg,
-    rgb(52 211 153 / 0.16) 175deg,
-    transparent 230deg,
-    rgb(139 92 246 / 0.14) 290deg,
+    rgb(34 211 238 / 0.28) 50deg,
+    transparent 105deg,
+    rgb(52 211 153 / 0.2) 165deg,
+    transparent 225deg,
+    rgb(139 92 246 / 0.18) 285deg,
     transparent 340deg
   );
-  filter: blur(80px);
+  filter: blur(72px);
   mix-blend-mode: screen;
-  opacity: 0.72;
-  animation: sweepSpin 28s linear infinite;
-  animation-delay: -8s;
+  opacity: 0.8;
+  animation: sweepSpin 24s linear infinite;
+  animation-delay: -4s;
   will-change: transform;
 }
 
@@ -59,14 +59,14 @@
 
 .grid {
   position: absolute;
-  inset: -14%;
+  inset: -18%;
   background-image:
-    linear-gradient(to right, rgb(255 255 255 / 0.05) 1px, transparent 1px),
-    linear-gradient(to bottom, rgb(255 255 255 / 0.05) 1px, transparent 1px);
+    linear-gradient(to right, rgb(165 243 252 / 0.09) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(165 243 252 / 0.09) 1px, transparent 1px);
   background-size: 72px 72px;
-  mask-image: radial-gradient(ellipse 70% 60% at 70% 45%, #000 20%, transparent 75%);
-  animation: meshDrift 18s ease-in-out infinite;
-  animation-delay: -5s;
+  mask-image: radial-gradient(ellipse 78% 68% at 68% 42%, #000 18%, transparent 78%);
+  animation: meshDrift 16s ease-in-out infinite;
+  animation-delay: -3.5s;
   will-change: transform;
 }
 
@@ -74,8 +74,8 @@
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(ellipse 48% 68% at 16% 48%, rgb(9 9 11 / 0.28), transparent 58%),
-    radial-gradient(ellipse 80% 80% at 50% 100%, rgb(9 9 11 / 0.72), transparent 50%);
+    radial-gradient(ellipse 46% 64% at 14% 48%, rgb(9 9 11 / 0.2), transparent 58%),
+    radial-gradient(ellipse 80% 80% at 50% 100%, rgb(9 9 11 / 0.68), transparent 50%);
 }
 
 .orb {
@@ -87,47 +87,47 @@
 }
 
 .orbCyan {
-  top: -22%;
-  right: -10%;
-  width: min(72vw, 880px);
-  height: min(62vw, 760px);
+  top: -16%;
+  right: -8%;
+  width: min(88vw, 1080px);
+  height: min(74vw, 900px);
   background: radial-gradient(circle at 32% 34%, #a5f3fc 0%, #22d3ee 42%, transparent 72%);
-  opacity: 0.52;
-  animation: auroraDriftA 14s ease-in-out infinite;
-  animation-delay: -3.2s;
+  opacity: 0.58;
+  animation: auroraDriftA 12s ease-in-out infinite;
+  animation-delay: -2.4s;
 }
 
 .orbEmerald {
-  bottom: -28%;
-  left: 2%;
-  width: min(62vw, 720px);
-  height: min(54vw, 640px);
+  bottom: -24%;
+  left: 12%;
+  width: min(78vw, 920px);
+  height: min(64vw, 780px);
   background: radial-gradient(circle at 40% 40%, #6ee7b7 0%, #34d399 40%, transparent 74%);
-  opacity: 0.4;
-  animation: auroraDriftB 16s ease-in-out infinite;
-  animation-delay: -11s;
+  opacity: 0.46;
+  animation: auroraDriftB 15s ease-in-out infinite;
+  animation-delay: -10s;
 }
 
 .orbViolet {
-  top: 18%;
-  right: 8%;
-  width: min(52vw, 620px);
-  height: min(48vw, 560px);
+  top: 12%;
+  right: 14%;
+  width: min(64vw, 760px);
+  height: min(56vw, 680px);
   background: radial-gradient(circle at 45% 38%, #c4b5fd 0%, #8b5cf6 44%, transparent 72%);
-  opacity: 0.34;
+  opacity: 0.38;
   animation: auroraDriftC 18s ease-in-out infinite;
-  animation-delay: -6.5s;
+  animation-delay: -7s;
 }
 
 .orbSoft {
-  top: 4%;
-  left: 10%;
-  width: min(42vw, 460px);
-  height: min(38vw, 420px);
+  top: -4%;
+  left: 18%;
+  width: min(58vw, 680px);
+  height: min(50vw, 560px);
   background: radial-gradient(circle at 50% 50%, #67e8f9 0%, #22d3ee 36%, transparent 70%);
-  opacity: 0.22;
-  animation: auroraDriftB 12s ease-in-out infinite reverse;
-  animation-delay: -1.8s;
+  opacity: 0.28;
+  animation: auroraDriftB 11s ease-in-out infinite reverse;
+  animation-delay: -1.2s;
 }
 
 @keyframes sweepSpin {
@@ -142,84 +142,84 @@
 @keyframes meshDrift {
   0%,
   100% {
-    transform: translate3d(0, 0, 0) scale(1.02);
+    transform: translate3d(0, 0, 0) scale(1.04);
   }
   50% {
-    transform: translate3d(-22px, 14px, 0) scale(1.07);
+    transform: translate3d(-36px, 22px, 0) scale(1.1);
   }
 }
 
 @keyframes auroraDriftA {
   0% {
     border-radius: 46% 54% 42% 58% / 40% 48% 52% 60%;
-    transform: translate3d(8%, -6%, 0) rotate(-14deg) scale(0.9);
-    opacity: 0.4;
+    transform: translate3d(12%, -8%, 0) rotate(-18deg) scale(0.86);
+    opacity: 0.42;
   }
   25% {
     border-radius: 58% 42% 64% 36% / 52% 36% 64% 48%;
-    transform: translate3d(-12%, 10%, 0) rotate(18deg) scale(1.18);
-    opacity: 0.64;
+    transform: translate3d(-16%, 12%, 0) rotate(22deg) scale(1.22);
+    opacity: 0.7;
   }
   50% {
     border-radius: 38% 62% 34% 66% / 58% 44% 56% 42%;
-    transform: translate3d(-6%, 16%, 0) rotate(-10deg) scale(1.06);
-    opacity: 0.48;
+    transform: translate3d(-8%, 18%, 0) rotate(-12deg) scale(1.08);
+    opacity: 0.52;
   }
   75% {
     border-radius: 64% 36% 52% 48% / 42% 62% 38% 58%;
-    transform: translate3d(14%, -8%, 0) rotate(24deg) scale(1.22);
-    opacity: 0.58;
+    transform: translate3d(16%, -10%, 0) rotate(28deg) scale(1.26);
+    opacity: 0.62;
   }
   100% {
     border-radius: 46% 54% 42% 58% / 40% 48% 52% 60%;
-    transform: translate3d(8%, -6%, 0) rotate(-14deg) scale(0.9);
-    opacity: 0.4;
+    transform: translate3d(12%, -8%, 0) rotate(-18deg) scale(0.86);
+    opacity: 0.42;
   }
 }
 
 @keyframes auroraDriftB {
   0% {
     border-radius: 52% 48% 38% 62% / 44% 58% 42% 56%;
-    transform: translate3d(-10%, 8%, 0) rotate(12deg) scale(0.94);
-    opacity: 0.3;
+    transform: translate3d(-14%, 10%, 0) rotate(16deg) scale(0.9);
+    opacity: 0.32;
   }
   30% {
     border-radius: 36% 64% 58% 42% / 60% 40% 54% 46%;
-    transform: translate3d(14%, -12%, 0) rotate(-20deg) scale(1.2);
-    opacity: 0.5;
+    transform: translate3d(18%, -14%, 0) rotate(-24deg) scale(1.24);
+    opacity: 0.56;
   }
   62% {
     border-radius: 60% 40% 48% 52% / 38% 62% 46% 54%;
-    transform: translate3d(-8%, -4%, 0) rotate(16deg) scale(1.08);
-    opacity: 0.36;
+    transform: translate3d(-10%, -6%, 0) rotate(18deg) scale(1.1);
+    opacity: 0.4;
   }
   100% {
     border-radius: 52% 48% 38% 62% / 44% 58% 42% 56%;
-    transform: translate3d(-10%, 8%, 0) rotate(12deg) scale(0.94);
-    opacity: 0.3;
+    transform: translate3d(-14%, 10%, 0) rotate(16deg) scale(0.9);
+    opacity: 0.32;
   }
 }
 
 @keyframes auroraDriftC {
   0% {
     border-radius: 40% 60% 55% 45% / 48% 42% 58% 52%;
-    transform: translate3d(4%, 10%, 0) rotate(-18deg) scale(0.96);
-    opacity: 0.26;
+    transform: translate3d(6%, 12%, 0) rotate(-22deg) scale(0.92);
+    opacity: 0.28;
   }
   40% {
     border-radius: 62% 38% 44% 56% / 36% 60% 40% 64%;
-    transform: translate3d(-14%, -8%, 0) rotate(22deg) scale(1.24);
-    opacity: 0.46;
+    transform: translate3d(-18%, -10%, 0) rotate(26deg) scale(1.28);
+    opacity: 0.5;
   }
   70% {
     border-radius: 48% 52% 68% 32% / 58% 36% 64% 42%;
-    transform: translate3d(10%, 12%, 0) rotate(-8deg) scale(1.1);
-    opacity: 0.34;
+    transform: translate3d(12%, 14%, 0) rotate(-10deg) scale(1.12);
+    opacity: 0.36;
   }
   100% {
     border-radius: 40% 60% 55% 45% / 48% 42% 58% 52%;
-    transform: translate3d(4%, 10%, 0) rotate(-18deg) scale(0.96);
-    opacity: 0.26;
+    transform: translate3d(6%, 12%, 0) rotate(-22deg) scale(0.92);
+    opacity: 0.28;
   }
 }
 
@@ -532,22 +532,22 @@
 
 .root[data-reduced="true"] .orbCyan {
   transform: translate3d(-8%, 8%, 0) rotate(8deg) scale(1.08);
-  opacity: 0.5;
+  opacity: 0.56;
 }
 
 .root[data-reduced="true"] .orbEmerald {
   transform: translate3d(8%, -6%, 0) rotate(-10deg) scale(1.1);
-  opacity: 0.38;
+  opacity: 0.42;
 }
 
 .root[data-reduced="true"] .orbViolet {
   transform: translate3d(-6%, 4%, 0) rotate(12deg) scale(1.06);
-  opacity: 0.32;
+  opacity: 0.36;
 }
 
 .root[data-reduced="true"] .orbSoft {
   transform: translate3d(4%, 6%, 0) scale(1.04);
-  opacity: 0.2;
+  opacity: 0.24;
 }
 
 .root[data-reduced="true"] .sweep {
