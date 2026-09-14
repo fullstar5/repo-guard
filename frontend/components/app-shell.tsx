@@ -1,10 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import { ChevronDown, LayoutGrid, ShieldCheck } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import { logout, type AuthUser } from "@/lib/api";
 import { initialsFromLogin } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -41,7 +40,7 @@ export function AppShell({
       </aside>
 
       <div className="flex min-h-screen min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b border-[#27272a] bg-[#09090b] px-6">
+        <header className="sticky top-0 z-20 flex h-14 items-center justify-between overflow-visible border-b border-[#27272a] bg-[#09090b] px-6">
           <p className="text-sm text-[#a1a1aa]">
             Workspace
             <span className="mx-2 text-[#3f3f46]">·</span>
@@ -57,21 +56,6 @@ export function AppShell({
 
 function UserMenu({ user }: { user: AuthUser }) {
   const queryClient = useQueryClient();
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    function onPointer(event: MouseEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", onPointer);
-    return () => document.removeEventListener("mousedown", onPointer);
-  }, [open]);
 
   async function handleLogout() {
     try {
@@ -83,32 +67,25 @@ function UserMenu({ user }: { user: AuthUser }) {
   }
 
   return (
-    <div ref={rootRef} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        className="flex items-center gap-2 rounded-full py-1 pr-1 pl-1 text-sm text-[#fafafa] hover:bg-[#18181b]"
-      >
+    <details className="relative">
+      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-full py-1 pr-1 pl-1 text-sm text-[#fafafa] hover:bg-[#18181b] [&::-webkit-details-marker]:hidden">
         <span className="flex size-7 items-center justify-center rounded-full bg-[#164e63] text-xs font-medium text-[#67e8f9]">
           {initialsFromLogin(user.github_login)}
         </span>
         <span className="hidden sm:inline">{user.github_login}</span>
         <ChevronDown className="size-4 text-[#a1a1aa]" aria-hidden="true" />
-      </button>
-      {open ? (
-        <div className="absolute right-0 mt-2 w-40 rounded-lg border border-[#3f3f46] bg-[#18181b] p-1 shadow-lg">
-          <Button
-            variant="ghost"
-            className="w-full justify-start text-[#fafafa]"
-            onClick={() => {
-              setOpen(false);
-              void handleLogout();
-            }}
-          >
-            Log out
-          </Button>
-        </div>
-      ) : null}
-    </div>
+      </summary>
+      <div className="absolute right-0 z-50 mt-2 w-40 rounded-lg border border-[#3f3f46] bg-[#18181b] p-1 shadow-lg">
+        <button
+          type="button"
+          className="flex h-8 w-full items-center rounded-md px-2 text-sm text-[#fafafa] hover:bg-[#27272a]"
+          onClick={() => {
+            void handleLogout();
+          }}
+        >
+          Log out
+        </button>
+      </div>
+    </details>
   );
 }

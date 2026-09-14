@@ -214,8 +214,8 @@ export default function PullRequestFilePage() {
                       })
                     }
                     className={cn(
-                      "flex flex-col gap-1.5 border-b border-[#27272a] px-3 py-3 hover:bg-[#27272a]/50",
-                      index === scopedFindingIndex ? "bg-[#27272a]" : undefined,
+                      "flex flex-col items-start gap-1.5 border-b border-[#27272a] px-3 py-3 hover:bg-[#27272a]/50",
+                      index === scopedFindingIndex ? "bg-[#27272a] shadow-[inset_2px_0_0_#22d3ee]" : undefined,
                     )}
                   >
                     <SeverityBadge severity={finding.severity} />

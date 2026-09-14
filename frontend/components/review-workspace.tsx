@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 
 import { snippetAround } from "@/components/diff-view";
 import { SeverityBadge, SeverityCountChip } from "@/components/status-badges";
 import { InlineStatus } from "@/components/empty-state";
-import { getPullRequestFile, type PullRequestFile, type ReviewFinding, type ReviewFindingSeverity, type ReviewJob } from "@/lib/api";
+import { api, type PullRequestFile, type PullRequestFileDetail, type ReviewFinding, type ReviewFindingSeverity, type ReviewJob } from "@/lib/api";
 import { formatRelativeTime } from "@/lib/format";
 import { toJobUiStatus } from "@/lib/job-status";
 import {
@@ -37,10 +38,9 @@ export function ReviewWorkspace({
   repositoryId: number;
   pullRequestId: number;
 }) {
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [severity, setSeverity] = useState<ReviewFindingSeverity | "all">("all");
-  const [selectedId, setSelectedId] = useState<number | null>(
-    job.findings[0]?.id ?? null,
-  );
 
   const counts = useMemo(() => {
     const next: Record<ReviewFindingSeverity, number> = {
@@ -65,8 +65,16 @@ export function ReviewWorkspace({
       });
   }, [job.findings, severity]);
 
+  const requestedId = Number(searchParams.get("finding"));
   const selected =
-    filtered.find((finding) => finding.id === selectedId) ?? filtered[0] ?? null;
+    filtered.find((finding) => finding.id === requestedId) ?? filtered[0] ?? null;
+
+  function findingHref(id: number) {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("finding", String(id));
+    return `${pathname}?${params.toString()}`;
+  }
+
   const uiStatus = toJobUiStatus(job.status);
 
   if (job.status === "pending" || job.status === "processing") {
@@ -130,12 +138,14 @@ export function ReviewWorkspace({
             <ul className="flex-1 overflow-y-auto">
               {filtered.map((finding) => (
                 <li key={finding.id}>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedId(finding.id)}
+                  <Link
+                    href={findingHref(finding.id)}
+                    scroll={false}
                     className={cn(
-                      "flex w-full flex-col gap-1.5 border-b border-[#27272a] px-3 py-3 text-left hover:bg-[#27272a]/50",
-                      selected?.id === finding.id ? "bg-[#27272a]" : undefined,
+                      "flex w-full flex-col items-start gap-1.5 border-b border-[#27272a] px-3 py-3 text-left hover:bg-[#27272a]/50",
+                      selected?.id === finding.id
+                        ? "bg-[#27272a] shadow-[inset_2px_0_0_#22d3ee]"
+                        : undefined,
                     )}
                   >
                     <SeverityBadge severity={finding.severity} />
@@ -145,13 +155,14 @@ export function ReviewWorkspace({
                     <span className="truncate font-mono text-[11px] text-[#71717a]">
                       {findingLocationLabel(finding)}
                     </span>
-                  </button>
+                  </Link>
                 </li>
               ))}
             </ul>
           </section>
 
           <FindingDetail
+            key={selected?.id ?? "empty"}
             finding={selected}
             files={files}
             jobId={job.id}
@@ -247,14 +258,21 @@ function FindingSnippet({
 }) {
   const fileQuery = useQuery({
     queryKey: ["pull-requests", pullRequestId, "files", fileId],
-    queryFn: () => getPullRequestFile(pullRequestId, fileId),
+    queryFn: async () => {
+      const response = await api.get<PullRequestFileDetail>(
+        `/pull-requests/${pullRequestId}/files/${fileId}`,
+        { timeout: 4000 },
+      );
+      return response.data;
+    },
+    retry: false,
   });
 
   const lines = snippetAround(fileQuery.data?.patch ?? null, startLine, endLine, 2);
-  if (fileQuery.isLoading) {
+  if (fileQuery.isPending) {
     return <InlineStatus>Loading snippet...</InlineStatus>;
   }
-  if (lines.length === 0) {
+  if (fileQuery.isError || lines.length === 0) {
     return null;
   }
 

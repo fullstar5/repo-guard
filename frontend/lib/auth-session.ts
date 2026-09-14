@@ -4,6 +4,7 @@ export const authMeQueryOptions = {
   queryKey: ["auth", "me"] as const,
   queryFn: getCurrentUser,
   refetchOnWindowFocus: false,
+  retry: false,
 };
 
 /**
