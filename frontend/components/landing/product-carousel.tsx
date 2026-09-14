@@ -20,8 +20,10 @@ const COUNT = SLIDES.length;
 const AUTO_MS = 4500;
 const IDLE_AFTER_DRAG_MS = 2200;
 const PX_PER_SLOT = 240;
-const RADIUS = 300;
-const TILT = 30;
+const RADIUS = 360;
+const TILT = 34;
+const SLOT_ANGLE = Math.PI / 3.05;
+const SIDE_SCALE = 0.84;
 const DRAG_CLICK_PX = 8;
 
 function wrapIndex(index: number) {
@@ -42,19 +44,17 @@ function slideStyle(rel: number, compact: boolean) {
   }
 
   const abs = Math.abs(rel);
-  const front = abs < 0.04;
-  const angle = rel * (Math.PI / 3.1);
-  const x = Math.round(Math.sin(angle) * RADIUS);
-  const z = front ? 0 : Math.round(Math.cos(angle) * RADIUS - RADIUS * 0.42);
-  const rotateY = front ? 0 : rel * -TILT;
-  const opacity = front ? 1 : 0.78 + 0.1 * Math.max(0, 1 - abs);
+  const angle = rel * SLOT_ANGLE;
+  const x = Math.sin(angle) * RADIUS;
+  const z = Math.cos(angle) * RADIUS - RADIUS * 0.38;
+  const rotateY = rel * -TILT;
+  const scale = 1 - Math.min(abs, 1) * (1 - SIDE_SCALE);
+  const opacity = 1 - Math.min(abs, 1) * 0.28;
 
   return {
-    transform: front
-      ? "translate(-50%, -50%)"
-      : `translate(-50%, -50%) translate3d(${x}px, 0, ${z}px) rotateY(${rotateY.toFixed(2)}deg)`,
+    transform: `translate(-50%, -50%) translate3d(${x.toFixed(1)}px, 0, ${z.toFixed(1)}px) rotateY(${rotateY.toFixed(2)}deg) scale(${scale.toFixed(3)})`,
     opacity,
-    zIndex: front ? 4 : Math.max(1, Math.round((1 - abs) * 3)),
+    zIndex: Math.round((1 - abs) * 24) + 2,
   };
 }
 
