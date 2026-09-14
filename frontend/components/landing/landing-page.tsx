@@ -99,8 +99,9 @@ export function LandingPage({ loginUrl }: { loginUrl: string }) {
               </a>
             </div>
             <p className={styles.legal}>
-              By continuing you agree to our Terms and Privacy Policy. GitHub App
-              install required after sign-in.
+              By continuing you agree to our Terms and Privacy Policy.
+              <br />
+              GitHub App install required after sign-in.
             </p>
           </div>
 
