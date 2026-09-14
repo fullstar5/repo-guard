@@ -5,7 +5,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { isAxiosError } from "axios";
 
 import { AppHeader } from "@/components/app-header";
+import { LandingPage } from "@/components/landing/landing-page";
 import { Button } from "@/components/ui/button";
+import { isInitialAuthPending, authMeQueryOptions } from "@/lib/auth-session";
 import {
   Table,
   TableBody,
@@ -15,7 +17,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
-  getCurrentUser,
   getGitHubLoginUrl,
   listRepositories,
   syncRepositories,
@@ -23,10 +24,7 @@ import {
 
 export default function HomePage() {
   const queryClient = useQueryClient();
-  const meQuery = useQuery({
-    queryKey: ["auth", "me"],
-    queryFn: getCurrentUser,
-  });
+  const meQuery = useQuery(authMeQueryOptions);
 
   const reposQuery = useQuery({
     queryKey: ["repositories"],
@@ -46,28 +44,16 @@ export default function HomePage() {
     isAxiosError(meQuery.error) &&
     meQuery.error.response?.status === 401;
 
-  if (meQuery.isLoading) {
+  if (isInitialAuthPending(meQuery)) {
     return (
-      <main className="flex min-h-screen items-center justify-center">
-        <p className="text-sm text-zinc-500">Loading session...</p>
+      <main className="flex min-h-screen items-center justify-center bg-[#09090b]">
+        <p className="text-sm text-[#a1a1aa]">Loading session...</p>
       </main>
     );
   }
 
   if (unauthorized || meQuery.isError || !meQuery.data) {
-    return (
-      <main className="flex min-h-screen items-center justify-center">
-        <div className="flex w-full max-w-md flex-col gap-4 rounded-xl border p-8">
-          <h1 className="text-2xl font-semibold">CodeGuard AI</h1>
-          <p className="text-sm text-zinc-600">
-            Sign in with GitHub to review pull requests.
-          </p>
-          <Button asChild>
-            <a href={getGitHubLoginUrl()}>Continue with GitHub</a>
-          </Button>
-        </div>
-      </main>
-    );
+    return <LandingPage loginUrl={getGitHubLoginUrl()} />;
   }
 
   return (
