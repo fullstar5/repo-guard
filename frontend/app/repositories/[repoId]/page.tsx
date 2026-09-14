@@ -1,33 +1,45 @@
 "use client";
 
 import Link from "next/link";
+import { useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { isAxiosError } from "axios";
+import { GitPullRequest, RefreshCw } from "lucide-react";
 
-import { AppHeader } from "@/components/app-header";
-import { Button } from "@/components/ui/button";
-import { authMeQueryOptions, isInitialAuthPending } from "@/lib/auth-session";
+import { AuthGate } from "@/components/auth-gate";
+import { EmptyState, InlineStatus } from "@/components/empty-state";
 import {
+  Breadcrumbs,
+  FilterBar,
+  FilterSelect,
+  PageToolbar,
+  SearchInput,
+} from "@/components/page-chrome";
+import {
+  LeanTable,
+  LeanTableCell,
+  LeanTableHead,
+  LeanTableHeader,
+  LeanTableRow,
   Table,
   TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
-  getGitHubLoginUrl,
-  listPullRequests,
-  syncPullRequests,
-} from "@/lib/api";
+} from "@/components/lean-table";
+import { PullRequestStateBadge } from "@/components/status-badges";
+import { Button } from "@/components/ui/button";
+import { authMeQueryOptions } from "@/lib/auth-session";
+import { formatRelativeTime } from "@/lib/format";
+import { listPullRequests, syncPullRequests } from "@/lib/api";
+import { useRepository } from "@/lib/use-repository";
 
 export default function RepositoryPullRequestsPage() {
   const params = useParams<{ repoId: string }>();
   const repositoryId = Number(params.repoId);
   const queryClient = useQueryClient();
+  const [search, setSearch] = useState("");
+  const [stateFilter, setStateFilter] = useState("all");
 
   const meQuery = useQuery(authMeQueryOptions);
+  const { repository } = useRepository(repositoryId);
 
   const prsQuery = useQuery({
     queryKey: ["repositories", repositoryId, "pull-requests"],
@@ -45,104 +57,120 @@ export default function RepositoryPullRequestsPage() {
     },
   });
 
-  const unauthorized =
-    meQuery.isError &&
-    isAxiosError(meQuery.error) &&
-    meQuery.error.response?.status === 401;
+  const filtered = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return (prsQuery.data ?? []).filter((pr) => {
+      if (stateFilter === "open" && (pr.is_draft || pr.state.toLowerCase() !== "open")) {
+        return false;
+      }
+      if (stateFilter === "closed" && pr.state.toLowerCase() === "open") {
+        return false;
+      }
+      if (stateFilter === "draft" && !pr.is_draft) {
+        return false;
+      }
+      if (!query) {
+        return true;
+      }
+      return (
+        pr.title.toLowerCase().includes(query) ||
+        `#${pr.number}`.includes(query) ||
+        (pr.author_login ?? "").toLowerCase().includes(query)
+      );
+    });
+  }, [prsQuery.data, search, stateFilter]);
 
-  if (isInitialAuthPending(meQuery)) {
-    return (
-      <main className="flex min-h-screen items-center justify-center">
-        <p className="text-sm text-zinc-500">Loading session...</p>
-      </main>
-    );
-  }
-
-  if (unauthorized || meQuery.isError || !meQuery.data) {
-    return (
-      <main className="flex min-h-screen items-center justify-center">
-        <Button asChild>
-          <a href={getGitHubLoginUrl()}>Continue with GitHub</a>
-        </Button>
-      </main>
-    );
-  }
+  const syncButton = (
+    <Button
+      variant="outline"
+      onClick={() => syncMutation.mutate()}
+      disabled={syncMutation.isPending}
+    >
+      <RefreshCw className="size-4" aria-hidden="true" />
+      {syncMutation.isPending ? "Syncing..." : "Sync"}
+    </Button>
+  );
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-6 p-8">
-      <AppHeader user={meQuery.data} />
+    <AuthGate>
+      <Breadcrumbs
+        items={[
+          { label: "Repositories", href: "/" },
+          { label: repository?.full_name ?? `Repository ${repositoryId}` },
+        ]}
+      />
 
-      <div>
-        <Link href="/" className="text-sm text-zinc-500 hover:underline">
-          ← Repositories
-        </Link>
-      </div>
+      <PageToolbar title="Pull requests" action={syncButton} />
 
-      <section className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-medium">Pull requests</h2>
-          <p className="text-sm text-zinc-500">
-            Sync this repository to refresh GitHub PR data.
-          </p>
-        </div>
-        <Button
-          onClick={() => syncMutation.mutate()}
-          disabled={syncMutation.isPending}
-        >
-          {syncMutation.isPending ? "Syncing..." : "Sync pull requests"}
-        </Button>
-      </section>
+      {(prsQuery.data?.length ?? 0) > 0 ? (
+        <FilterBar>
+          <SearchInput
+            value={search}
+            onChange={setSearch}
+            placeholder="Search pull requests..."
+          />
+          <FilterSelect
+            value={stateFilter}
+            onChange={setStateFilter}
+            options={[
+              { value: "all", label: "All" },
+              { value: "open", label: "Open" },
+              { value: "closed", label: "Closed" },
+              { value: "draft", label: "Draft" },
+            ]}
+          />
+        </FilterBar>
+      ) : null}
 
       {prsQuery.isLoading ? (
-        <p className="text-sm text-zinc-500">Loading pull requests...</p>
+        <InlineStatus>Loading pull requests...</InlineStatus>
       ) : prsQuery.isError ? (
-        <p className="text-sm text-red-600">Failed to load pull requests.</p>
-      ) : prsQuery.data?.length === 0 ? (
-        <p className="text-sm text-zinc-500">
-          No pull requests yet. Click Sync pull requests.
-        </p>
+        <InlineStatus tone="danger">Failed to load pull requests.</InlineStatus>
+      ) : (prsQuery.data?.length ?? 0) === 0 ? (
+        <EmptyState
+          icon={<GitPullRequest className="size-7 text-[#22d3ee]" aria-hidden="true" />}
+          title="No pull requests yet"
+          hint="Sync from GitHub to load PRs for this repository."
+          actionLabel="Sync"
+          onAction={() => syncMutation.mutate()}
+          actionPending={syncMutation.isPending}
+        />
+      ) : filtered.length === 0 ? (
+        <InlineStatus>No pull requests match the current filters.</InlineStatus>
       ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>PR</TableHead>
-              <TableHead>Title</TableHead>
-              <TableHead>State</TableHead>
-              <TableHead>Author</TableHead>
-              <TableHead>Branches</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {prsQuery.data?.map((pr) => (
-              <TableRow key={pr.id}>
-                <TableCell>
-                  <a
-                    href={pr.html_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="hover:underline"
-                  >
-                    #{pr.number}
-                  </a>
-                </TableCell>
-                <TableCell>
-                  <Link
-                    href={`/repositories/${repositoryId}/pull-requests/${pr.id}`}
-                    className="hover:underline"
-                  >
-                    {pr.title}
-                  </Link>
-                </TableCell>
-                <TableCell>{pr.is_draft ? "draft" : pr.state}</TableCell>
-                <TableCell>{pr.author_login ?? "-"}</TableCell>
-                <TableCell>
-                  {pr.head_branch} → {pr.base_branch}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+        <LeanTable>
+          <Table>
+            <LeanTableHeader>
+              <LeanTableRow>
+                <LeanTableHead>Title</LeanTableHead>
+                <LeanTableHead>State</LeanTableHead>
+                <LeanTableHead className="text-right">Updated</LeanTableHead>
+              </LeanTableRow>
+            </LeanTableHeader>
+            <TableBody>
+              {filtered.map((pr) => (
+                <LeanTableRow key={pr.id}>
+                  <LeanTableCell>
+                    <Link
+                      href={`/repositories/${repositoryId}/pull-requests/${pr.id}`}
+                      className="text-sm font-medium text-[#fafafa] hover:text-[#67e8f9]"
+                    >
+                      <span className="mr-2 text-[#a1a1aa]">#{pr.number}</span>
+                      {pr.title}
+                    </Link>
+                  </LeanTableCell>
+                  <LeanTableCell>
+                    <PullRequestStateBadge state={pr.state} isDraft={pr.is_draft} />
+                  </LeanTableCell>
+                  <LeanTableCell className="text-right text-[#a1a1aa]">
+                    {formatRelativeTime(pr.github_updated_at)}
+                  </LeanTableCell>
+                </LeanTableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </LeanTable>
       )}
-    </main>
+    </AuthGate>
   );
 }
