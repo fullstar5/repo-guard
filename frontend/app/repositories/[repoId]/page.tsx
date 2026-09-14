@@ -26,34 +26,39 @@ import {
 } from "@/components/lean-table";
 import { PullRequestStateBadge } from "@/components/status-badges";
 import { Button } from "@/components/ui/button";
+import { apiErrorMessage } from "@/lib/api-error";
 import { authMeQueryOptions } from "@/lib/auth-session";
 import { formatRelativeTime } from "@/lib/format";
+import { parsePositiveInt } from "@/lib/ids";
 import { listPullRequests, syncPullRequests } from "@/lib/api";
+import { pullRequestListKey } from "@/lib/query-keys";
+import { applySyncedList, reconcileFetchedList } from "@/lib/sync-list-cache";
 import { useRepository } from "@/lib/use-repository";
 
 export default function RepositoryPullRequestsPage() {
   const params = useParams<{ repoId: string }>();
-  const repositoryId = Number(params.repoId);
+  const repositoryId = parsePositiveInt(params.repoId);
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [stateFilter, setStateFilter] = useState("all");
 
   const meQuery = useQuery(authMeQueryOptions);
-  const { repository } = useRepository(repositoryId);
+  const { repository } = useRepository(repositoryId ?? Number.NaN);
 
   const prsQuery = useQuery({
-    queryKey: ["repositories", repositoryId, "pull-requests"],
-    queryFn: () => listPullRequests(repositoryId),
-    enabled: meQuery.isSuccess && Number.isFinite(repositoryId),
+    queryKey: pullRequestListKey(repositoryId ?? 0),
+    queryFn: async () =>
+      reconcileFetchedList(
+        pullRequestListKey(repositoryId!),
+        await listPullRequests(repositoryId!),
+      ),
+    enabled: meQuery.isSuccess && repositoryId != null,
   });
 
   const syncMutation = useMutation({
-    mutationFn: () => syncPullRequests(repositoryId),
-    onSuccess: (items) => {
-      queryClient.setQueryData(
-        ["repositories", repositoryId, "pull-requests"],
-        items,
-      );
+    mutationFn: () => syncPullRequests(repositoryId!),
+    onSuccess: async (items) => {
+      await applySyncedList(queryClient, pullRequestListKey(repositoryId!), items);
     },
   });
 
@@ -80,6 +85,14 @@ export default function RepositoryPullRequestsPage() {
     });
   }, [prsQuery.data, search, stateFilter]);
 
+  if (repositoryId == null) {
+    return (
+      <AuthGate>
+        <InlineStatus tone="danger">Invalid repository id.</InlineStatus>
+      </AuthGate>
+    );
+  }
+
   const syncButton = (
     <Button
       variant="outline"
@@ -101,6 +114,14 @@ export default function RepositoryPullRequestsPage() {
       />
 
       <PageToolbar title="Pull requests" action={syncButton} />
+
+      {syncMutation.isError ? (
+        <div className="mb-4">
+          <InlineStatus tone="danger">
+            {apiErrorMessage(syncMutation.error, "Failed to sync pull requests.")}
+          </InlineStatus>
+        </div>
+      ) : null}
 
       {(prsQuery.data?.length ?? 0) > 0 ? (
         <FilterBar>
@@ -125,7 +146,14 @@ export default function RepositoryPullRequestsPage() {
       {prsQuery.isLoading ? (
         <InlineStatus>Loading pull requests...</InlineStatus>
       ) : prsQuery.isError ? (
-        <InlineStatus tone="danger">Failed to load pull requests.</InlineStatus>
+        <InlineStatus
+          tone="danger"
+          onRetry={() => {
+            void prsQuery.refetch();
+          }}
+        >
+          Failed to load pull requests.
+        </InlineStatus>
       ) : (prsQuery.data?.length ?? 0) === 0 ? (
         <EmptyState
           icon={<GitPullRequest className="size-7 text-[#22d3ee]" aria-hidden="true" />}

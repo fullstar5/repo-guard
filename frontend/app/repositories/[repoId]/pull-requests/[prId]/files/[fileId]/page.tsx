@@ -18,6 +18,9 @@ import {
   listReviewJobs,
 } from "@/lib/api";
 import { authMeQueryOptions } from "@/lib/auth-session";
+import { parsePositiveInt } from "@/lib/ids";
+import { activeJobsRefetchInterval } from "@/lib/job-status";
+import { reviewJobsKey } from "@/lib/query-keys";
 import {
   findingLocationLabel,
   findingsForFile,
@@ -30,34 +33,33 @@ import { useRepository } from "@/lib/use-repository";
 export default function PullRequestFilePage() {
   const params = useParams<{ repoId: string; prId: string; fileId: string }>();
   const searchParams = useSearchParams();
-  const repositoryId = Number(params.repoId);
-  const pullRequestId = Number(params.prId);
-  const fileId = Number(params.fileId);
+  const repositoryId = parsePositiveInt(params.repoId);
+  const pullRequestId = parsePositiveInt(params.prId);
+  const fileId = parsePositiveInt(params.fileId);
   const jobIdParam = searchParams.get("jobId");
   const idsReady =
-    Number.isFinite(repositoryId) &&
-    Number.isFinite(pullRequestId) &&
-    Number.isFinite(fileId);
+    repositoryId != null && pullRequestId != null && fileId != null;
 
   const meQuery = useQuery(authMeQueryOptions);
-  const { repository } = useRepository(repositoryId);
+  const { repository } = useRepository(repositoryId ?? Number.NaN);
 
   const prQuery = useQuery({
     queryKey: ["pull-requests", pullRequestId],
-    queryFn: () => getPullRequest(pullRequestId),
+    queryFn: () => getPullRequest(pullRequestId!),
     enabled: meQuery.isSuccess && idsReady,
   });
 
   const fileQuery = useQuery({
     queryKey: ["pull-requests", pullRequestId, "files", fileId],
-    queryFn: () => getPullRequestFile(pullRequestId, fileId),
+    queryFn: () => getPullRequestFile(pullRequestId!, fileId!),
     enabled: meQuery.isSuccess && idsReady,
   });
 
   const jobsQuery = useQuery({
-    queryKey: ["pull-requests", pullRequestId, "review-jobs"],
-    queryFn: () => listReviewJobs(pullRequestId),
+    queryKey: reviewJobsKey(pullRequestId ?? 0),
+    queryFn: () => listReviewJobs(pullRequestId!),
     enabled: meQuery.isSuccess && idsReady,
+    refetchInterval: activeJobsRefetchInterval,
   });
 
   const explicitJob = pickSelectedReviewJob(jobsQuery.data ?? [], jobIdParam);
@@ -123,6 +125,16 @@ export default function PullRequestFilePage() {
     if (finding.start_line != null) {
       window.location.hash = `L${finding.start_line}`;
     }
+  }
+
+  if (repositoryId == null || pullRequestId == null || fileId == null) {
+    return (
+      <AuthGate>
+        <InlineStatus tone="danger">
+          Invalid repository, pull request, or file id.
+        </InlineStatus>
+      </AuthGate>
+    );
   }
 
   return (
@@ -236,7 +248,14 @@ export default function PullRequestFilePage() {
           {fileQuery.isLoading ? (
             <InlineStatus>Loading diff...</InlineStatus>
           ) : fileQuery.isError ? (
-            <InlineStatus tone="danger">Failed to load file diff.</InlineStatus>
+            <InlineStatus
+              tone="danger"
+              onRetry={() => {
+                void fileQuery.refetch();
+              }}
+            >
+              Failed to load file diff.
+            </InlineStatus>
           ) : (
             <DiffView
               patch={file?.patch ?? null}

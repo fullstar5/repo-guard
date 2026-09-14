@@ -28,7 +28,28 @@ export function AuthGate({ children }: { children: ReactNode }) {
     return <LoadingSession />;
   }
 
-  if (unauthorized || meQuery.isError || !meQuery.data) {
+  if (unauthorized) {
+    return <LandingPage loginUrl={getGitHubLoginUrl()} />;
+  }
+
+  if (meQuery.isError) {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center gap-3 bg-[#09090b]">
+        <p className="text-sm text-[#fca5a5]">Couldn&apos;t load your session.</p>
+        <button
+          type="button"
+          className="text-sm text-[#67e8f9] hover:underline"
+          onClick={() => {
+            void meQuery.refetch();
+          }}
+        >
+          Try again
+        </button>
+      </main>
+    );
+  }
+
+  if (!meQuery.data) {
     return <LandingPage loginUrl={getGitHubLoginUrl()} />;
   }
 

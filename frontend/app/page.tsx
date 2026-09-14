@@ -24,9 +24,12 @@ import {
 } from "@/components/lean-table";
 import { VisibilityBadge } from "@/components/status-badges";
 import { Button } from "@/components/ui/button";
+import { apiErrorMessage } from "@/lib/api-error";
 import { authMeQueryOptions } from "@/lib/auth-session";
 import { formatRelativeTime } from "@/lib/format";
 import { listRepositories, syncRepositories } from "@/lib/api";
+import { repositoryListKey } from "@/lib/query-keys";
+import { applySyncedList, reconcileFetchedList } from "@/lib/sync-list-cache";
 
 export default function HomePage() {
   const queryClient = useQueryClient();
@@ -35,15 +38,16 @@ export default function HomePage() {
   const [visibility, setVisibility] = useState("all");
 
   const reposQuery = useQuery({
-    queryKey: ["repositories"],
-    queryFn: listRepositories,
+    queryKey: repositoryListKey,
+    queryFn: async () =>
+      reconcileFetchedList(repositoryListKey, await listRepositories()),
     enabled: meQuery.isSuccess,
   });
 
   const syncMutation = useMutation({
     mutationFn: syncRepositories,
-    onSuccess: (items) => {
-      queryClient.setQueryData(["repositories"], items);
+    onSuccess: async (items) => {
+      await applySyncedList(queryClient, repositoryListKey, items);
     },
   });
 
@@ -79,6 +83,14 @@ export default function HomePage() {
         }
       />
 
+      {syncMutation.isError ? (
+        <div className="mb-4">
+          <InlineStatus tone="danger">
+            {apiErrorMessage(syncMutation.error, "Failed to sync repositories.")}
+          </InlineStatus>
+        </div>
+      ) : null}
+
       <FilterBar>
         <SearchInput
           value={search}
@@ -99,7 +111,14 @@ export default function HomePage() {
       {reposQuery.isLoading ? (
         <InlineStatus>Loading repositories...</InlineStatus>
       ) : reposQuery.isError ? (
-        <InlineStatus tone="danger">Failed to load repositories.</InlineStatus>
+        <InlineStatus
+          tone="danger"
+          onRetry={() => {
+            void reposQuery.refetch();
+          }}
+        >
+          Failed to load repositories.
+        </InlineStatus>
       ) : (reposQuery.data?.length ?? 0) === 0 ? (
         <EmptyState
           icon={<BookMarked className="size-7 text-[#22d3ee]" aria-hidden="true" />}

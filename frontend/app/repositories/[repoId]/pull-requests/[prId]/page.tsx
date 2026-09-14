@@ -13,12 +13,16 @@ import { ReviewJobsTable } from "@/components/review-jobs-table";
 import { ReviewWorkspace } from "@/components/review-workspace";
 import { PullRequestStateBadge } from "@/components/status-badges";
 import { Button } from "@/components/ui/button";
+import { apiErrorMessage } from "@/lib/api-error";
 import {
   pickSelectedReviewJob,
   resolveDisplayedReviewJob,
 } from "@/lib/review-findings";
 import { authMeQueryOptions } from "@/lib/auth-session";
-import { isActiveJob } from "@/lib/job-status";
+import { parsePositiveInt } from "@/lib/ids";
+import { activeJobsRefetchInterval, isActiveJob } from "@/lib/job-status";
+import { pullRequestFilesKey, reviewJobsKey } from "@/lib/query-keys";
+import { applySyncedList, reconcileFetchedList } from "@/lib/sync-list-cache";
 import { cn } from "@/lib/utils";
 import { useRepository } from "@/lib/use-repository";
 import {
@@ -27,6 +31,7 @@ import {
   listPullRequestFiles,
   listReviewJobs,
   syncPullRequestFiles,
+  type ReviewJob,
 } from "@/lib/api";
 
 type PrTab = "review" | "files" | "jobs";
@@ -41,50 +46,62 @@ function parseTab(value: string | null): PrTab | null {
 export default function PullRequestReviewPage() {
   const params = useParams<{ repoId: string; prId: string }>();
   const searchParams = useSearchParams();
-  const repositoryId = Number(params.repoId);
-  const pullRequestId = Number(params.prId);
+  const repositoryId = parsePositiveInt(params.repoId);
+  const pullRequestId = parsePositiveInt(params.prId);
   const queryClient = useQueryClient();
-  const idsReady = Number.isFinite(repositoryId) && Number.isFinite(pullRequestId);
+  const idsReady = repositoryId != null && pullRequestId != null;
   const jobIdParam = searchParams.get("jobId");
   const requestedTab = parseTab(searchParams.get("tab"));
 
   const meQuery = useQuery(authMeQueryOptions);
-  const { repository } = useRepository(repositoryId);
+  const { repository } = useRepository(repositoryId ?? Number.NaN);
 
   const prQuery = useQuery({
     queryKey: ["pull-requests", pullRequestId],
-    queryFn: () => getPullRequest(pullRequestId),
+    queryFn: () => getPullRequest(pullRequestId!),
     enabled: meQuery.isSuccess && idsReady,
   });
 
   const filesQuery = useQuery({
-    queryKey: ["pull-requests", pullRequestId, "files"],
-    queryFn: () => listPullRequestFiles(pullRequestId),
+    queryKey: pullRequestFilesKey(pullRequestId ?? 0),
+    queryFn: async () =>
+      reconcileFetchedList(
+        pullRequestFilesKey(pullRequestId!),
+        await listPullRequestFiles(pullRequestId!),
+      ),
     enabled: meQuery.isSuccess && idsReady,
   });
 
   const jobsQuery = useQuery({
-    queryKey: ["pull-requests", pullRequestId, "review-jobs"],
-    queryFn: () => listReviewJobs(pullRequestId),
+    queryKey: reviewJobsKey(pullRequestId ?? 0),
+    queryFn: () => listReviewJobs(pullRequestId!),
     enabled: meQuery.isSuccess && idsReady,
-    refetchInterval: (query) => {
-      const jobs = query.state.data ?? [];
-      return jobs.some(isActiveJob) ? 60000 : false;
-    },
+    refetchInterval: activeJobsRefetchInterval,
   });
 
   const syncFilesMutation = useMutation({
-    mutationFn: () => syncPullRequestFiles(pullRequestId),
-    onSuccess: (items) => {
-      queryClient.setQueryData(["pull-requests", pullRequestId, "files"], items);
+    mutationFn: () => syncPullRequestFiles(pullRequestId!),
+    onSuccess: async (items) => {
+      await applySyncedList(queryClient, pullRequestFilesKey(pullRequestId!), items);
     },
   });
 
   const createJobMutation = useMutation({
-    mutationFn: () => createReviewJob(pullRequestId),
-    onSuccess: () => {
+    mutationFn: () => createReviewJob(pullRequestId!),
+    onSuccess: (job) => {
+      queryClient.setQueryData(
+        reviewJobsKey(pullRequestId!),
+        (current: ReviewJob[] | undefined) => {
+          const jobs = current ?? [];
+          if (jobs.some((existing) => existing.id === job.id)) {
+            return jobs;
+          }
+          return [job, ...jobs];
+        },
+      );
       void queryClient.invalidateQueries({
-        queryKey: ["pull-requests", pullRequestId, "review-jobs"],
+        queryKey: reviewJobsKey(pullRequestId!),
+        exact: true,
       });
     },
   });
@@ -96,7 +113,9 @@ export default function PullRequestReviewPage() {
     jobIdParam != null && jobsQuery.isSuccess && pickSelectedReviewJob(jobsQuery.data ?? [], jobIdParam) == null;
   const hasFindings =
     selectedJob?.status === "completed" && (selectedJob.findings.length ?? 0) > 0;
-  const tab: PrTab = requestedTab ?? (hasFindings ? "review" : "files");
+  const tab: PrTab =
+    requestedTab ??
+    (!jobsQuery.isSuccess ? "review" : hasFindings ? "review" : "files");
 
   function tabHref(next: PrTab) {
     const params = new URLSearchParams(searchParams.toString());
@@ -109,6 +128,14 @@ export default function PullRequestReviewPage() {
     params.set("tab", nextTab);
     params.set("jobId", String(jobId));
     return `?${params.toString()}`;
+  }
+
+  if (repositoryId == null || pullRequestId == null) {
+    return (
+      <AuthGate>
+        <InlineStatus tone="danger">Invalid repository or pull request id.</InlineStatus>
+      </AuthGate>
+    );
   }
 
   return (
@@ -164,9 +191,32 @@ export default function PullRequestReviewPage() {
         </div>
       </section>
 
+      {prQuery.isError ? (
+        <div className="mb-4">
+          <InlineStatus
+            tone="danger"
+            onRetry={() => {
+              void prQuery.refetch();
+            }}
+          >
+            Failed to load pull request.
+          </InlineStatus>
+        </div>
+      ) : null}
+
       {createJobMutation.isError ? (
         <div className="mb-4">
-          <InlineStatus tone="danger">Failed to enqueue review job.</InlineStatus>
+          <InlineStatus tone="danger">
+            {apiErrorMessage(createJobMutation.error, "Failed to enqueue review job.")}
+          </InlineStatus>
+        </div>
+      ) : null}
+
+      {syncFilesMutation.isError ? (
+        <div className="mb-4">
+          <InlineStatus tone="danger">
+            {apiErrorMessage(syncFilesMutation.error, "Failed to sync files.")}
+          </InlineStatus>
         </div>
       ) : null}
 
@@ -188,7 +238,18 @@ export default function PullRequestReviewPage() {
       </div>
 
       {tab === "review" ? (
-        selectedJobNotFound ? (
+        jobsQuery.isLoading ? (
+          <InlineStatus>Loading review...</InlineStatus>
+        ) : jobsQuery.isError ? (
+          <InlineStatus
+            tone="danger"
+            onRetry={() => {
+              void jobsQuery.refetch();
+            }}
+          >
+            Failed to load review jobs.
+          </InlineStatus>
+        ) : selectedJobNotFound ? (
           <InlineStatus tone="danger">
             Review job #{jobIdParam} was not found for this pull request.
           </InlineStatus>
@@ -218,7 +279,14 @@ export default function PullRequestReviewPage() {
           {filesQuery.isLoading ? (
             <InlineStatus>Loading files...</InlineStatus>
           ) : filesQuery.isError ? (
-            <InlineStatus tone="danger">Failed to load files.</InlineStatus>
+            <InlineStatus
+              tone="danger"
+              onRetry={() => {
+                void filesQuery.refetch();
+              }}
+            >
+              Failed to load files.
+            </InlineStatus>
           ) : (filesQuery.data?.length ?? 0) === 0 ? (
             <EmptyState
               icon={<RefreshCw className="size-7 text-[#22d3ee]" aria-hidden="true" />}
@@ -257,7 +325,14 @@ export default function PullRequestReviewPage() {
         jobsQuery.isLoading ? (
           <InlineStatus>Loading review jobs...</InlineStatus>
         ) : jobsQuery.isError ? (
-          <InlineStatus tone="danger">Failed to load review jobs.</InlineStatus>
+          <InlineStatus
+            tone="danger"
+            onRetry={() => {
+              void jobsQuery.refetch();
+            }}
+          >
+            Failed to load review jobs.
+          </InlineStatus>
         ) : (jobsQuery.data?.length ?? 0) === 0 ? (
           <InlineStatus>No review jobs yet. Sync files, then run AI review.</InlineStatus>
         ) : (

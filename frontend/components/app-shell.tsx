@@ -6,6 +6,7 @@ import { ChevronDown, LayoutGrid, ShieldCheck } from "lucide-react";
 
 import { logout, type AuthUser } from "@/lib/api";
 import { initialsFromLogin } from "@/lib/format";
+import { clearSyncListCache } from "@/lib/sync-list-cache";
 import { cn } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -61,8 +62,8 @@ function UserMenu({ user }: { user: AuthUser }) {
     try {
       await logout();
     } finally {
-      queryClient.setQueryData(["auth", "me"], undefined);
-      await queryClient.resetQueries({ queryKey: ["auth", "me"] });
+      clearSyncListCache();
+      queryClient.clear();
     }
   }
 

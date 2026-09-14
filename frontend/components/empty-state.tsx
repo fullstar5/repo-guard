@@ -41,11 +41,15 @@ export function EmptyState({
 export function InlineStatus({
   children,
   tone = "muted",
+  onRetry,
+  retryLabel = "Try again",
 }: {
   children: ReactNode;
   tone?: "muted" | "danger";
+  onRetry?: () => void;
+  retryLabel?: string;
 }) {
-  return (
+  const message = (
     <p
       className={cn(
         "text-sm",
@@ -54,5 +58,18 @@ export function InlineStatus({
     >
       {children}
     </p>
+  );
+
+  if (!onRetry) {
+    return message;
+  }
+
+  return (
+    <div className="flex flex-col items-start gap-3">
+      {message}
+      <Button variant="outline" size="sm" type="button" onClick={onRetry}>
+        {retryLabel}
+      </Button>
+    </div>
   );
 }
