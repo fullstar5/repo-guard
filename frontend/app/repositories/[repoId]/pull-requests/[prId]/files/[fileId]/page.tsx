@@ -1,27 +1,31 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { isAxiosError } from "axios";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 
-import { AppHeader } from "@/components/app-header";
+import { AuthGate } from "@/components/auth-gate";
 import { DiffView, findingsToHighlights } from "@/components/diff-view";
-import { SeverityBadge } from "@/components/review-findings";
+import { Breadcrumbs } from "@/components/page-chrome";
+import { InlineStatus } from "@/components/empty-state";
+import { SeverityBadge } from "@/components/status-badges";
 import { Button } from "@/components/ui/button";
 import {
-  getGitHubLoginUrl,
   getPullRequest,
   getPullRequestFile,
   listReviewJobs,
 } from "@/lib/api";
-import { authMeQueryOptions, isInitialAuthPending } from "@/lib/auth-session";
+import { authMeQueryOptions } from "@/lib/auth-session";
 import {
   findingLocationLabel,
   findingsForFile,
   pickSelectedReviewJob,
+  resolveDisplayedReviewJob,
 } from "@/lib/review-findings";
+import { cn } from "@/lib/utils";
+import { useRepository } from "@/lib/use-repository";
 
 export default function PullRequestFilePage() {
   const params = useParams<{ repoId: string; prId: string; fileId: string }>();
@@ -36,6 +40,7 @@ export default function PullRequestFilePage() {
     Number.isFinite(fileId);
 
   const meQuery = useQuery(authMeQueryOptions);
+  const { repository } = useRepository(repositoryId);
 
   const prQuery = useQuery({
     queryKey: ["pull-requests", pullRequestId],
@@ -55,141 +60,191 @@ export default function PullRequestFilePage() {
     enabled: meQuery.isSuccess && idsReady,
   });
 
-  const selectedJob = pickSelectedReviewJob(jobsQuery.data ?? [], jobIdParam);
+  const explicitJob = pickSelectedReviewJob(jobsQuery.data ?? [], jobIdParam);
   const selectedJobNotFound =
-    jobIdParam != null && jobsQuery.isSuccess && selectedJob == null;
+    jobIdParam != null && jobsQuery.isSuccess && explicitJob == null;
+  const selectedJob = selectedJobNotFound
+    ? undefined
+    : resolveDisplayedReviewJob(jobsQuery.data ?? [], jobIdParam);
 
   const file = fileQuery.data;
-  const fileFindings =
-    selectedJob && file ? findingsForFile(selectedJob.findings, file) : [];
+  const fileFindings = useMemo(
+    () => (selectedJob && file ? findingsForFile(selectedJob.findings, file) : []),
+    [selectedJob, file],
+  );
+  const [findingCursor, setFindingCursor] = useState({
+    fileId,
+    jobId: selectedJob?.id ?? null,
+    index: 0,
+  });
+  const cursorMatches =
+    findingCursor.fileId === fileId &&
+    findingCursor.jobId === (selectedJob?.id ?? null);
+  const activeFindingIndex = cursorMatches ? findingCursor.index : 0;
+  const scopedFindingIndex =
+    fileFindings.length === 0
+      ? 0
+      : Math.min(activeFindingIndex, fileFindings.length - 1);
 
   useEffect(() => {
     if (!fileQuery.data || selectedJobNotFound) {
       return;
     }
     const match = window.location.hash.match(/^#L(\d+)/);
-    if (!match) {
+    if (match) {
+      document.getElementById(`L${match[1]}`)?.scrollIntoView({
+        block: "center",
+      });
       return;
     }
-    document.getElementById(`L${match[1]}`)?.scrollIntoView({
-      block: "center",
+    const finding = fileFindings[scopedFindingIndex];
+    if (finding?.start_line != null) {
+      document.getElementById(`L${finding.start_line}`)?.scrollIntoView({
+        block: "center",
+      });
+    }
+  }, [fileQuery.data, fileFindings, scopedFindingIndex, selectedJobNotFound]);
+
+  const backHref = `/repositories/${repositoryId}/pull-requests/${pullRequestId}${
+    selectedJob ? `?jobId=${selectedJob.id}&tab=files` : "?tab=files"
+  }`;
+
+  function goFinding(next: number) {
+    if (fileFindings.length === 0) {
+      return;
+    }
+    const index = (next + fileFindings.length) % fileFindings.length;
+    setFindingCursor({
+      fileId,
+      jobId: selectedJob?.id ?? null,
+      index,
     });
-  }, [fileQuery.data, fileFindings.length, selectedJobNotFound]);
-
-  const unauthorized =
-    meQuery.isError &&
-    isAxiosError(meQuery.error) &&
-    meQuery.error.response?.status === 401;
-
-  if (isInitialAuthPending(meQuery)) {
-    return (
-      <main className="flex min-h-screen items-center justify-center">
-        <p className="text-sm text-zinc-500">Loading session...</p>
-      </main>
-    );
-  }
-
-  if (unauthorized || meQuery.isError || !meQuery.data) {
-    return (
-      <main className="flex min-h-screen items-center justify-center">
-        <Button asChild>
-          <a href={getGitHubLoginUrl()}>Continue with GitHub</a>
-        </Button>
-      </main>
-    );
+    const finding = fileFindings[index];
+    if (finding.start_line != null) {
+      window.location.hash = `L${finding.start_line}`;
+    }
   }
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-6 p-8">
-      <AppHeader user={meQuery.data} />
+    <AuthGate>
+      <Breadcrumbs
+        items={[
+          { label: "Repositories", href: "/" },
+          {
+            label: repository?.full_name ?? `Repository ${repositoryId}`,
+            href: `/repositories/${repositoryId}`,
+          },
+          {
+            label: prQuery.data ? `PR #${prQuery.data.number}` : `PR ${pullRequestId}`,
+            href: backHref,
+          },
+          { label: file?.filename ?? "File" },
+        ]}
+      />
 
-      <div>
-        <Link
-          href={`/repositories/${repositoryId}/pull-requests/${pullRequestId}${
-            selectedJob ? `?jobId=${selectedJob.id}` : ""
-          }`}
-          className="text-sm text-zinc-500 hover:underline"
-        >
-          ← Changed files
-        </Link>
+      <div className="sticky top-14 z-10 -mx-8 mb-6 flex flex-wrap items-center justify-between gap-3 border-y border-[#27272a] bg-[#09090b] px-8 py-3">
+        <div className="min-w-0">
+          <p className="truncate font-mono text-sm text-[#fafafa]">
+            {file?.filename ?? "Loading file..."}
+          </p>
+          {file ? (
+            <p className="mt-1 font-mono text-xs tabular-nums">
+              <span className="text-[#4ade80]">+{file.additions}</span>{" "}
+              <span className="text-[#f87171]">-{file.deletions}</span>
+            </p>
+          ) : null}
+        </div>
+        <div className="flex items-center gap-2">
+          {fileFindings.length > 0 ? (
+            <div className="flex items-center gap-1">
+              <span className="px-1 text-xs tabular-nums text-[#a1a1aa]">
+                {scopedFindingIndex + 1} / {fileFindings.length}
+              </span>
+              <Button
+                variant="outline"
+                size="icon-sm"
+                onClick={() => goFinding(scopedFindingIndex - 1)}
+                aria-label="Previous finding"
+              >
+                <ChevronLeft />
+              </Button>
+              <Button
+                variant="outline"
+                size="icon-sm"
+                onClick={() => goFinding(scopedFindingIndex + 1)}
+                aria-label="Next finding"
+              >
+                <ChevronRight />
+              </Button>
+            </div>
+          ) : null}
+          <Button variant="outline" asChild>
+            <Link href={backHref}>Back to PR</Link>
+          </Button>
+        </div>
       </div>
 
-      <section>
-        <h2 className="text-lg font-medium">
-          {file?.filename ?? "Loading file..."}
-        </h2>
-        {file && (
-          <p className="text-sm text-zinc-500">
-            {file.status}
-            {" · "}
-            <span className="text-emerald-600">+{file.additions}</span>
-            {" / "}
-            <span className="text-red-600">-{file.deletions}</span>
-            {prQuery.data && (
-              <>
-                {" · "}
-                {prQuery.data.head_branch} → {prQuery.data.base_branch}
-              </>
-            )}
-            {selectedJob && (
-              <>
-                {" · "}
-                job #{selectedJob.id}
-              </>
-            )}
-          </p>
-        )}
-        {file?.previous_filename && (
-          <p className="text-xs text-zinc-500">
-            renamed from {file.previous_filename}
-          </p>
-        )}
-      </section>
-
-      {selectedJobNotFound && (
-        <p className="text-sm text-red-600">
+      {selectedJobNotFound ? (
+        <InlineStatus tone="danger">
           Review job #{jobIdParam} was not found for this pull request.
-        </p>
-      )}
+        </InlineStatus>
+      ) : null}
 
-      {selectedJob && fileFindings.length > 0 && (
-        <section className="rounded-xl border bg-white p-4">
-          <h3 className="mb-3 text-sm font-medium">
-            Findings in this file ({fileFindings.length})
-          </h3>
-          <ul className="flex flex-col gap-2">
-            {fileFindings.map((finding) => (
-              <li key={finding.id} className="flex items-start gap-2 text-sm">
-                <SeverityBadge severity={finding.severity} />
-                {finding.start_line != null ? (
-                  <a href={`#L${finding.start_line}`} className="hover:underline">
-                    {findingLocationLabel(finding)}
-                    {": "}
-                    {finding.summary}
+      <div
+        className={cn(
+          "grid gap-4",
+          fileFindings.length > 0 ? "lg:grid-cols-[minmax(220px,280px)_1fr]" : undefined,
+        )}
+      >
+        {selectedJob && fileFindings.length > 0 ? (
+          <section className="overflow-hidden rounded-xl border border-[#3f3f46] bg-[#18181b]">
+            <h2 className="border-b border-[#27272a] px-3 py-2.5 text-sm font-medium">
+              Findings
+            </h2>
+            <ul>
+              {fileFindings.map((finding, index) => (
+                <li key={finding.id}>
+                  <a
+                    href={finding.start_line != null ? `#L${finding.start_line}` : undefined}
+                    onClick={() =>
+                      setFindingCursor({
+                        fileId,
+                        jobId: selectedJob?.id ?? null,
+                        index,
+                      })
+                    }
+                    className={cn(
+                      "flex flex-col items-start gap-1.5 border-b border-[#27272a] px-3 py-3 hover:bg-[#27272a]/50",
+                      index === scopedFindingIndex ? "bg-[#27272a] shadow-[inset_2px_0_0_#22d3ee]" : undefined,
+                    )}
+                  >
+                    <SeverityBadge severity={finding.severity} />
+                    <span className="line-clamp-2 text-sm text-[#fafafa]">
+                      {finding.summary}
+                    </span>
+                    <span className="font-mono text-[11px] text-[#71717a]">
+                      {findingLocationLabel(finding)}
+                    </span>
                   </a>
-                ) : (
-                  <span>
-                    {findingLocationLabel(finding)}
-                    {": "}
-                    {finding.summary}
-                  </span>
-                )}
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
 
-      {fileQuery.isLoading ? (
-        <p className="text-sm text-zinc-500">Loading diff...</p>
-      ) : fileQuery.isError ? (
-        <p className="text-sm text-red-600">Failed to load file diff.</p>
-      ) : (
-        <DiffView
-          patch={file?.patch ?? null}
-          highlights={selectedJob ? findingsToHighlights(fileFindings) : []}
-        />
-      )}
-    </main>
+        <div className="min-w-0">
+          {fileQuery.isLoading ? (
+            <InlineStatus>Loading diff...</InlineStatus>
+          ) : fileQuery.isError ? (
+            <InlineStatus tone="danger">Failed to load file diff.</InlineStatus>
+          ) : (
+            <DiffView
+              patch={file?.patch ?? null}
+              highlights={selectedJob ? findingsToHighlights(fileFindings) : []}
+            />
+          )}
+        </div>
+      </div>
+    </AuthGate>
   );
 }

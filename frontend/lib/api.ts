@@ -36,6 +36,7 @@ export type Repository = {
     owner_login: string;
     private: boolean;
     default_branch: string | null;
+    updated_at: string;
 };
   
 export type PullRequest = {
@@ -49,6 +50,7 @@ export type PullRequest = {
     base_branch: string;
     head_branch: string;
     is_draft: boolean;
+    github_updated_at: string;
 };
 
 

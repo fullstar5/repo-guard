@@ -31,6 +31,26 @@ export function pickSelectedReviewJob(
     return jobs.find((job) => job.id === jobId);
 }
 
+/** Latest successful job, else the newest job. Used when the URL has no jobId. */
+export function resolveDisplayedReviewJob(
+    jobs: ReviewJob[],
+    jobIdParam: string | null,
+): ReviewJob | undefined {
+    const explicit = pickSelectedReviewJob(jobs, jobIdParam);
+    if (explicit) {
+        return explicit;
+    }
+    if (jobs.length === 0) {
+        return undefined;
+    }
+    const completed = jobs.filter((job) => job.status === "completed");
+    const pool = completed.length > 0 ? completed : jobs;
+    return [...pool].sort(
+        (left, right) =>
+            new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime(),
+    )[0];
+}
+
 
 export function resolveFindingFile(
     files: PullRequestFile[],

@@ -3,35 +3,39 @@
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { isAxiosError } from "axios";
+import { RefreshCw } from "lucide-react";
 
-import { AppHeader } from "@/components/app-header";
-import { ReviewFindingsPanel } from "@/components/review-findings";
+import { AuthGate } from "@/components/auth-gate";
+import { ChangedFilesTable } from "@/components/changed-files-table";
+import { EmptyState, InlineStatus } from "@/components/empty-state";
+import { Breadcrumbs } from "@/components/page-chrome";
+import { ReviewJobsTable } from "@/components/review-jobs-table";
+import { ReviewWorkspace } from "@/components/review-workspace";
+import { PullRequestStateBadge } from "@/components/status-badges";
 import { Button } from "@/components/ui/button";
-import { pickSelectedReviewJob } from "@/lib/review-findings";
-import { authMeQueryOptions, isInitialAuthPending } from "@/lib/auth-session";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+  pickSelectedReviewJob,
+  resolveDisplayedReviewJob,
+} from "@/lib/review-findings";
+import { authMeQueryOptions } from "@/lib/auth-session";
+import { isActiveJob } from "@/lib/job-status";
+import { cn } from "@/lib/utils";
+import { useRepository } from "@/lib/use-repository";
 import {
   createReviewJob,
-  getGitHubLoginUrl,
   getPullRequest,
   listPullRequestFiles,
   listReviewJobs,
   syncPullRequestFiles,
-  type ReviewJob,
 } from "@/lib/api";
 
-const ACTIVE_STATUSES = new Set(["pending", "processing"]);
+type PrTab = "review" | "files" | "jobs";
 
-function isActiveJob(job: ReviewJob): boolean {
-  return ACTIVE_STATUSES.has(job.status);
+function parseTab(value: string | null): PrTab | null {
+  if (value === "review" || value === "files" || value === "jobs") {
+    return value;
+  }
+  return null;
 }
 
 export default function PullRequestReviewPage() {
@@ -42,8 +46,10 @@ export default function PullRequestReviewPage() {
   const queryClient = useQueryClient();
   const idsReady = Number.isFinite(repositoryId) && Number.isFinite(pullRequestId);
   const jobIdParam = searchParams.get("jobId");
+  const requestedTab = parseTab(searchParams.get("tab"));
 
   const meQuery = useQuery(authMeQueryOptions);
+  const { repository } = useRepository(repositoryId);
 
   const prQuery = useQuery({
     queryKey: ["pull-requests", pullRequestId],
@@ -83,78 +89,70 @@ export default function PullRequestReviewPage() {
     },
   });
 
-  const unauthorized =
-    meQuery.isError &&
-    isAxiosError(meQuery.error) &&
-    meQuery.error.response?.status === 401;
-
   const hasActiveJob = (jobsQuery.data ?? []).some(isActiveJob);
   const fileCount = filesQuery.data?.length ?? 0;
-  const selectedJob = pickSelectedReviewJob(jobsQuery.data ?? [], jobIdParam);
+  const selectedJob = resolveDisplayedReviewJob(jobsQuery.data ?? [], jobIdParam);
   const selectedJobNotFound =
-    jobIdParam != null && jobsQuery.isSuccess && selectedJob == null;
+    jobIdParam != null && jobsQuery.isSuccess && pickSelectedReviewJob(jobsQuery.data ?? [], jobIdParam) == null;
+  const hasFindings =
+    selectedJob?.status === "completed" && (selectedJob.findings.length ?? 0) > 0;
+  const tab: PrTab = requestedTab ?? (hasFindings ? "review" : "files");
 
-  if (isInitialAuthPending(meQuery)) {
-    return (
-      <main className="flex min-h-screen items-center justify-center">
-        <p className="text-sm text-zinc-500">Loading session...</p>
-      </main>
-    );
+  function tabHref(next: PrTab) {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("tab", next);
+    return `?${params.toString()}`;
   }
 
-  if (unauthorized || meQuery.isError || !meQuery.data) {
-    return (
-      <main className="flex min-h-screen items-center justify-center">
-        <Button asChild>
-          <a href={getGitHubLoginUrl()}>Continue with GitHub</a>
-        </Button>
-      </main>
-    );
+  function jobHref(jobId: number, nextTab: PrTab = "review") {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("tab", nextTab);
+    params.set("jobId", String(jobId));
+    return `?${params.toString()}`;
   }
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-6 p-8">
-      <AppHeader user={meQuery.data} />
+    <AuthGate>
+      <Breadcrumbs
+        items={[
+          { label: "Repositories", href: "/" },
+          {
+            label: repository?.full_name ?? `Repository ${repositoryId}`,
+            href: `/repositories/${repositoryId}`,
+          },
+          { label: prQuery.data ? `PR #${prQuery.data.number}` : `PR ${pullRequestId}` },
+        ]}
+      />
 
-      <div>
-        <Link
-          href={`/repositories/${repositoryId}`}
-          className="text-sm text-zinc-500 hover:underline"
-        >
-          ← Pull requests
-        </Link>
-      </div>
-
-      <section className="flex items-start justify-between gap-4">
-        <div>
-          <h2 className="text-lg font-medium">
-            {prQuery.data
-              ? `#${prQuery.data.number} ${prQuery.data.title}`
-              : `Pull request #${pullRequestId}`}
-          </h2>
-          {prQuery.data && (
-            <p className="text-sm text-zinc-500">
-              {prQuery.data.head_branch} → {prQuery.data.base_branch}
-              {" · "}
-              <a
-                href={prQuery.data.html_url}
-                target="_blank"
-                rel="noreferrer"
-                className="hover:underline"
-              >
+      <section className="mb-6 flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-semibold tracking-tight text-[#fafafa]">
+            {prQuery.data?.title ?? "Pull request"}
+          </h1>
+          {prQuery.data ? (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <PullRequestStateBadge
+                state={prQuery.data.state}
+                isDraft={prQuery.data.is_draft}
+              />
+              <span className="rounded-md bg-[#18181b] px-2 py-0.5 font-mono text-xs text-[#a1a1aa] ring-1 ring-[#3f3f46]">
+                {prQuery.data.base_branch}
+              </span>
+              <span className="text-[#3f3f46]">→</span>
+              <span className="rounded-md bg-[#18181b] px-2 py-0.5 font-mono text-xs text-[#a1a1aa] ring-1 ring-[#3f3f46]">
+                {prQuery.data.head_branch}
+              </span>
+            </div>
+          ) : null}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {prQuery.data ? (
+            <Button variant="outline" asChild>
+              <a href={prQuery.data.html_url} target="_blank" rel="noreferrer">
                 Open on GitHub
               </a>
-            </p>
-          )}
-        </div>
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            onClick={() => syncFilesMutation.mutate()}
-            disabled={syncFilesMutation.isPending}
-          >
-            {syncFilesMutation.isPending ? "Syncing files..." : "Sync files"}
-          </Button>
+            </Button>
+          ) : null}
           <Button
             onClick={() => createJobMutation.mutate()}
             disabled={
@@ -166,138 +164,113 @@ export default function PullRequestReviewPage() {
         </div>
       </section>
 
-      {createJobMutation.isError && (
-        <p className="text-sm text-red-600">Failed to enqueue review job.</p>
-      )}
+      {createJobMutation.isError ? (
+        <div className="mb-4">
+          <InlineStatus tone="danger">Failed to enqueue review job.</InlineStatus>
+        </div>
+      ) : null}
 
-      <section>
-        <h3 className="mb-3 text-base font-medium">
-          Changed files{fileCount > 0 ? ` (${fileCount})` : ""}
-        </h3>
-        {filesQuery.isLoading ? (
-          <p className="text-sm text-zinc-500">Loading files...</p>
-        ) : filesQuery.isError ? (
-          <p className="text-sm text-red-600">Failed to load files.</p>
-        ) : filesQuery.data?.length === 0 ? (
-          <p className="text-sm text-zinc-500">
-            No files synced yet. Sync files before running a review.
-          </p>
-        ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>File</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Additions</TableHead>
-                <TableHead>Deletions</TableHead>
-                <TableHead>Changes</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filesQuery.data?.map((file) => (
-                <TableRow key={file.id}>
-                  <TableCell>
-                    <Link
-                      href={`/repositories/${repositoryId}/pull-requests/${pullRequestId}/files/${file.id}${
-                        selectedJob ? `?jobId=${selectedJob.id}` : ""
-                      }`}
-                      className="font-medium hover:underline"
-                    >
-                      {file.filename}
-                    </Link>
-                    {file.previous_filename && (
-                      <div className="text-xs text-zinc-500">
-                        renamed from {file.previous_filename}
-                      </div>
-                    )}
-                  </TableCell>
-                  <TableCell>{file.status}</TableCell>
-                  <TableCell className="text-emerald-600">
-                    +{file.additions}
-                  </TableCell>
-                  <TableCell className="text-red-600">
-                    -{file.deletions}
-                  </TableCell>
-                  <TableCell>{file.changes}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
-      </section>
+      <div className="mb-6 inline-flex rounded-lg border border-[#3f3f46] bg-[#18181b] p-1">
+        {(["review", "files", "jobs"] as const).map((item) => (
+          <Link
+            key={item}
+            href={tabHref(item)}
+            className={cn(
+              "rounded-md px-3 py-1.5 text-sm capitalize",
+              tab === item
+                ? "bg-[#27272a] text-[#fafafa]"
+                : "text-[#a1a1aa] hover:text-[#fafafa]",
+            )}
+          >
+            {item}
+          </Link>
+        ))}
+      </div>
 
-      <section>
-        <h3 className="mb-3 text-base font-medium">Review jobs</h3>
-        {jobsQuery.isLoading ? (
-          <p className="text-sm text-zinc-500">Loading review jobs...</p>
-        ) : jobsQuery.isError ? (
-          <p className="text-sm text-red-600">Failed to load review jobs.</p>
-        ) : jobsQuery.data?.length === 0 ? (
-          <p className="text-sm text-zinc-500">
-            No review jobs yet. Sync files, then run AI review.
-          </p>
-        ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>ID</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Files / chunks</TableHead>
-                <TableHead>Findings</TableHead>
-                <TableHead>Error</TableHead>
-                <TableHead>Updated</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {jobsQuery.data?.map((job) => (
-                <TableRow
-                  key={job.id}
-                  className={selectedJob?.id === job.id ? "bg-zinc-50" : undefined}
-                >
-                  <TableCell>
-                    <Link
-                      href={`?jobId=${job.id}`}
-                      className="font-medium hover:underline"
-                    >
-                      #{job.id}
-                    </Link>
-                  </TableCell>
-                  <TableCell>{job.status}</TableCell>
-                  <TableCell>
-                    {job.total_files} / {job.total_chunks}
-                  </TableCell>
-                  <TableCell>{job.findings.length}</TableCell>
-                  <TableCell className="max-w-xs truncate text-red-600">
-                    {job.error_message?.trim() || "-"}
-                  </TableCell>
-                  <TableCell>
-                    {new Date(job.updated_at).toLocaleString()}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
-      </section>
-
-      {selectedJobNotFound && (
-        <p className="text-sm text-red-600">
-          Review job #{jobIdParam} was not found for this pull request.
-        </p>
-      )}
-
-      {selectedJob && (
-        <section>
-          <h3 className="mb-3 text-base font-medium">Review results</h3>
-          <ReviewFindingsPanel
+      {tab === "review" ? (
+        selectedJobNotFound ? (
+          <InlineStatus tone="danger">
+            Review job #{jobIdParam} was not found for this pull request.
+          </InlineStatus>
+        ) : selectedJob ? (
+          <ReviewWorkspace
             key={selectedJob.id}
             job={selectedJob}
             files={filesQuery.data ?? []}
             repositoryId={repositoryId}
             pullRequestId={pullRequestId}
           />
-        </section>
-      )}
-    </main>
+        ) : (
+          <EmptyState
+            icon={<RefreshCw className="size-7 text-[#22d3ee]" aria-hidden="true" />}
+            title="No review yet"
+            hint={
+              fileCount === 0
+                ? "Sync files, then run an AI review."
+                : "Run AI review with the workspace default model."
+            }
+          />
+        )
+      ) : null}
+
+      {tab === "files" ? (
+        <div className="flex flex-col gap-4">
+          {filesQuery.isLoading ? (
+            <InlineStatus>Loading files...</InlineStatus>
+          ) : filesQuery.isError ? (
+            <InlineStatus tone="danger">Failed to load files.</InlineStatus>
+          ) : (filesQuery.data?.length ?? 0) === 0 ? (
+            <EmptyState
+              icon={<RefreshCw className="size-7 text-[#22d3ee]" aria-hidden="true" />}
+              title="No files synced yet"
+              hint="Sync files before running a review."
+              actionLabel="Sync"
+              onAction={() => syncFilesMutation.mutate()}
+              actionPending={syncFilesMutation.isPending}
+            />
+          ) : (
+            <>
+              <div className="flex items-center justify-end">
+                <Button
+                  variant="outline"
+                  onClick={() => syncFilesMutation.mutate()}
+                  disabled={syncFilesMutation.isPending}
+                >
+                  <RefreshCw className="size-4" aria-hidden="true" />
+                  {syncFilesMutation.isPending ? "Syncing..." : "Sync"}
+                </Button>
+              </div>
+              <ChangedFilesTable
+                files={filesQuery.data ?? []}
+                hrefForFile={(file) =>
+                  `/repositories/${repositoryId}/pull-requests/${pullRequestId}/files/${file.id}${
+                    selectedJob ? `?jobId=${selectedJob.id}` : ""
+                  }`
+                }
+              />
+            </>
+          )}
+        </div>
+      ) : null}
+
+      {tab === "jobs" ? (
+        jobsQuery.isLoading ? (
+          <InlineStatus>Loading review jobs...</InlineStatus>
+        ) : jobsQuery.isError ? (
+          <InlineStatus tone="danger">Failed to load review jobs.</InlineStatus>
+        ) : (jobsQuery.data?.length ?? 0) === 0 ? (
+          <InlineStatus>No review jobs yet. Sync files, then run AI review.</InlineStatus>
+        ) : (
+          <ReviewJobsTable
+            jobs={jobsQuery.data ?? []}
+            selectedJobId={selectedJob?.id}
+            hrefForJob={(job) => jobHref(job.id, "review")}
+            onRetry={() => createJobMutation.mutate()}
+            retryDisabled={hasActiveJob || fileCount === 0}
+            retryPending={createJobMutation.isPending}
+          />
+        )
+      ) : null}
+    </AuthGate>
   );
 }

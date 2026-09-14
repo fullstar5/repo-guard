@@ -1,10 +1,11 @@
 "use client";
 
+import { SeverityBadge } from "@/components/status-badges";
 import type { ReviewFinding, ReviewFindingSeverity } from "@/lib/api";
-import { SeverityBadge } from "@/components/review-findings";
 import { SEVERITY_ORDER } from "@/lib/review-findings";
+import { cn } from "@/lib/utils";
 
-type DiffLine = {
+export type DiffLine = {
     kind: "hunk" | "add" | "del" | "ctx" | "meta";
     text: string;
     oldLine: number | null;
@@ -29,7 +30,7 @@ function parseHunkHeader(text: string): { oldStart: number; newStart: number } |
  * Parse a GitHub unified patch into rows with old/new line numbers.
  * `-` advances old only, `+` advances new only, context advances both.
  */
-function parsePatch(patch: string): DiffLine[] {
+export function parsePatch(patch: string): DiffLine[] {
     let oldLine = 0;
     let newLine = 0;
 
@@ -62,19 +63,44 @@ function parsePatch(patch: string): DiffLine[] {
     });
 }
 
+export function snippetAround(
+    patch: string | null,
+    startLine: number,
+    endLine: number,
+    context = 2,
+): DiffLine[] {
+    if (!patch) {
+        return [];
+    }
+    const min = startLine - context;
+    const max = endLine + context;
+    return parsePatch(patch).filter((line) => {
+        if (line.kind === "hunk" || line.kind === "meta") {
+            return false;
+        }
+        if (line.newLine != null) {
+            return line.newLine >= min && line.newLine <= max;
+        }
+        if (line.oldLine != null && line.kind === "del") {
+            return line.oldLine >= min && line.oldLine <= max;
+        }
+        return false;
+    });
+}
+
 const LINE_CLASS: Record<DiffLine["kind"], string> = {
-    hunk: "bg-blue-50 text-blue-800",
-    add: "bg-emerald-50 text-emerald-800",
-    del: "bg-red-50 text-red-800",
-    ctx: "text-zinc-800",
-    meta: "text-zinc-500",
+    hunk: "bg-[#18181b] text-[#67e8f9]",
+    add: "bg-[#14532d]/40 text-[#86efac]",
+    del: "bg-[#7f1d1d]/40 text-[#fca5a5]",
+    ctx: "text-[#e4e4e7]",
+    meta: "text-[#71717a]",
 };
 
 const HIGHLIGHT_CLASS: Record<ReviewFindingSeverity, string> = {
-    critical: "outline outline-2 outline-red-500",
-    high: "outline outline-2 outline-orange-500",
-    medium: "outline outline-2 outline-amber-400",
-    low: "outline outline-2 outline-zinc-400",
+    critical: "shadow-[inset_3px_0_0_#ef4444]",
+    high: "shadow-[inset_3px_0_0_#f97316]",
+    medium: "shadow-[inset_3px_0_0_#eab308]",
+    low: "shadow-[inset_3px_0_0_#71717a]",
 };
 
 function highlightForLine(
@@ -120,7 +146,7 @@ export function DiffView({
 }) {
     if (!patch) {
         return (
-            <p className="text-sm text-zinc-500">
+            <p className="text-sm text-[#a1a1aa]">
                 No textual diff for this file. It may be binary, empty, or too large for
                 GitHub to include a patch.
             </p>
@@ -130,7 +156,7 @@ export function DiffView({
     const lines = parsePatch(patch);
 
     return (
-        <pre className="overflow-x-auto rounded-lg border bg-zinc-50 text-xs leading-6">
+        <pre className="overflow-x-auto rounded-xl border border-[#3f3f46] bg-[#09090b] text-xs leading-6">
             <code>
                 {lines.map((line, index) => {
                     const highlight = highlightForLine(highlights, line.newLine);
@@ -142,14 +168,16 @@ export function DiffView({
                         <div key={`${index}-${line.kind}`}>
                             <div
                                 id={line.newLine != null ? `L${line.newLine}` : undefined}
-                                className={`grid grid-cols-[3.5rem_3.5rem_1fr] ${LINE_CLASS[line.kind]} ${
-                                    highlight ? HIGHLIGHT_CLASS[highlight.finding.severity] : ""
-                                }`}
+                                className={cn(
+                                    "grid grid-cols-[3.5rem_3.5rem_1fr]",
+                                    LINE_CLASS[line.kind],
+                                    highlight ? HIGHLIGHT_CLASS[highlight.finding.severity] : "",
+                                )}
                             >
-                                <span className="select-none px-2 text-right text-zinc-400">
+                                <span className="select-none px-2 text-right text-[#52525b]">
                                     {line.oldLine ?? ""}
                                 </span>
-                                <span className="select-none border-r px-2 text-right text-zinc-400">
+                                <span className="select-none border-r border-[#27272a] px-2 text-right text-[#52525b]">
                                     {line.newLine ?? ""}
                                 </span>
                                 <span className="whitespace-pre px-3">
@@ -159,11 +187,11 @@ export function DiffView({
                             {comments.map((item) => (
                                 <div
                                     key={item.finding.id}
-                                    className="border-t bg-white px-4 py-3 text-sm leading-5 text-zinc-800"
+                                    className="border-y border-[#3f3f46] bg-[#18181b] px-4 py-3 text-sm leading-5 text-[#e4e4e7]"
                                 >
                                     <div className="mb-1 flex items-center gap-2">
                                         <SeverityBadge severity={item.finding.severity} />
-                                        <span className="text-xs text-zinc-500">
+                                        <span className="text-xs text-[#a1a1aa]">
                                             L{item.startLine}
                                             {item.endLine !== item.startLine
                                                 ? `–L${item.endLine}`
@@ -172,8 +200,8 @@ export function DiffView({
                                     </div>
                                     <p>{item.finding.summary}</p>
                                     {item.finding.suggestion && (
-                                        <p className="mt-1 text-zinc-600">
-                                            Suggestion: {item.finding.suggestion}
+                                        <p className="mt-1 text-[#a1a1aa]">
+                                            {item.finding.suggestion}
                                         </p>
                                     )}
                                 </div>
