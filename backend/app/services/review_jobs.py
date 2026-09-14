@@ -93,7 +93,9 @@ def _apply_file_path_fallback(
     ]
 
 
+
 def _dedup_findings(findings: list[ReviewFindingDraft]) -> list[ReviewFindingDraft]:
+    """remove duplicate findings"""
     dedup: list[ReviewFindingDraft] = []
     seen: set[tuple[str, int | None, int | None, str, str]] = set()
 
@@ -115,6 +117,27 @@ def _dedup_findings(findings: list[ReviewFindingDraft]) -> list[ReviewFindingDra
 
 
 
+
+def _format_review_job_error(exc: BaseException) -> str:
+    """
+    Never return empty string error to database,
+    """
+    if isinstance(exc, TimeoutError):
+        message = str(exc).strip()
+        if message:
+            return message
+        return (
+            "Review attempt timed out after "
+            f"{settings.openrouter_read_timeout:.0f}s waiting for the model."
+        )
+    message = str(exc).strip()
+    if message:
+        return message
+    return f"{type(exc).__name__}: review job failed with an empty exception message."
+
+
+
+
 async def _review_content_with_retries(
     provider: OpenRouterReviewProvider,
     content: str,
@@ -122,6 +145,7 @@ async def _review_content_with_retries(
     request_label: str,
     attempt_count: int = 3,
 ) -> ReviewResult:
+    """Review content with 3 retries"""
     last_exc: Exception | None = None
 
     for attempt in range(1, attempt_count + 1):
@@ -133,6 +157,11 @@ async def _review_content_with_retries(
                 timeout=settings.openrouter_read_timeout,
             )
         except Exception as exc:
+            if isinstance(exc, TimeoutError) and not str(exc).strip():
+                exc = TimeoutError(
+                    "Review attempt timed out after "
+                    f"{settings.openrouter_read_timeout:.0f}s waiting for the model."
+                )
             last_exc = exc
             logger.warning(
                 "Review attempt %s/%s failed for %s: %s",
@@ -272,6 +301,7 @@ async def create_review_job_if_no_active(
 
 
 
+
 async def execute_review_job(
     db: AsyncSession,
     review_job: ReviewJob,
@@ -391,7 +421,7 @@ async def execute_review_job(
         if failed_job is None:
             raise
         failed_job.status = ReviewJobStatus.failed
-        failed_job.error_message = str(exc)
+        failed_job.error_message = _format_review_job_error(exc)
 
         await db.commit()
         await db.refresh(failed_job)
@@ -464,7 +494,10 @@ async def mark_review_job_failed_by_id(
             return None
 
         review_job.status = ReviewJobStatus.failed
-        review_job.error_message = error_message
+        review_job.error_message = (
+            error_message.strip()
+            or "Review job failed with an empty error message."
+        )
 
         await db.commit()
         await db.refresh(review_job)

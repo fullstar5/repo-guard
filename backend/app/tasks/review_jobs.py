@@ -10,6 +10,7 @@ from app.services.review_jobs import (
     execute_review_job_by_id, 
     mark_review_job_failed_by_id,
     mark_abandoned_jobs_as_failed,
+    _format_review_job_error,
 )
 
 
@@ -89,7 +90,7 @@ def execute_review_job_task(self, review_job_id: int) -> dict[str, object]:
         if next_retry > self.max_retries:
             message = (
                 f"Task-level retries exhausted after "
-                f"{self.max_retries} attempts: {exc}"
+                f"{self.max_retries} attempts: {_format_review_job_error(exc=exc)}"
             )
             asyncio.run(mark_review_job_failed_by_id(review_job_id, message))
             logger.exception("Review job %s exhausted task-level retries.", review_job_id)
@@ -106,7 +107,7 @@ def execute_review_job_task(self, review_job_id: int) -> dict[str, object]:
 
 
     except Exception as exc:
-        message = f"Worker task failed before review completion: {exc}"
+        message = f"Worker task failed before review completion: {_format_review_job_error(exc=exc)}"
         asyncio.run(mark_review_job_failed_by_id(review_job_id, message))
         logger.exception("Review job %s failed in Celery task wrapper.", review_job_id)
         raise

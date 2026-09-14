@@ -271,7 +271,7 @@ export default function PullRequestReviewPage() {
                   </TableCell>
                   <TableCell>{job.findings.length}</TableCell>
                   <TableCell className="max-w-xs truncate text-red-600">
-                    {job.error_message ?? "-"}
+                    {job.error_message?.trim() || "-"}
                   </TableCell>
                   <TableCell>
                     {new Date(job.updated_at).toLocaleString()}

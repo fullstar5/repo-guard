@@ -99,7 +99,7 @@ export function ReviewFindingsPanel({
     if (job.status === "failed") {
         return (
             <p className="text-sm text-red-600">
-                {job.error_message ?? "Review job failed."}
+                {job.error_message?.trim() || "Review job failed."}
             </p>
         );
     }
