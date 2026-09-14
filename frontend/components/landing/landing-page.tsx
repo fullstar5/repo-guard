@@ -34,10 +34,13 @@ export function LandingPage({ loginUrl }: { loginUrl: string }) {
   return (
     <main className={styles.root} data-reduced={reducedMotion ? "true" : "false"}>
       <div className={styles.atmosphere} aria-hidden="true">
-        <div className={styles.orb + " " + styles.orbCyan} />
-        <div className={styles.orb + " " + styles.orbEmerald} />
-        <div className={styles.orb + " " + styles.orbViolet} />
-        <div className={styles.orb + " " + styles.orbSoft} />
+        <div className={styles.sweep} />
+        <div className={styles.aurora}>
+          <div className={styles.orb + " " + styles.orbCyan} />
+          <div className={styles.orb + " " + styles.orbEmerald} />
+          <div className={styles.orb + " " + styles.orbViolet} />
+          <div className={styles.orb + " " + styles.orbSoft} />
+        </div>
         <div className={styles.grid} />
         <div className={styles.vignette} />
       </div>
