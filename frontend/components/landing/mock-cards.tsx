@@ -41,7 +41,7 @@ export function ReviewMockCard() {
       </div>
 
       <div className="relative mx-4 overflow-hidden rounded-[8px] border border-[#3f3f46] bg-[#09090b] font-mono text-[11px] leading-5">
-        <div className="absolute inset-y-0 left-0 w-[2px] bg-[#22d3ee]" />
+        <div className="absolute inset-y-0 left-0 w-[3px] bg-[#22d3ee]" />
         <div className="px-3 py-2 text-[#a1a1aa]">
           <div>
             <span className="inline-block w-6 text-right text-[#52525b]">

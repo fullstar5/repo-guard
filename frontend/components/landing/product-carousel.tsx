@@ -28,13 +28,7 @@ function relativeSlot(index: number, active: number) {
 
 function slideStyle(rel: number, compact: boolean) {
   if (compact) {
-    const isFront = rel === 0;
-    return {
-      transform: `translate(-50%, -50%) scale(${isFront ? 1 : 0.94})`,
-      opacity: isFront ? 1 : 0,
-      filter: "none",
-      pointerEvents: isFront ? "auto" : "none",
-    } as const;
+    return undefined;
   }
 
   const angle = rel * (Math.PI / 3.05);
@@ -49,8 +43,7 @@ function slideStyle(rel: number, compact: boolean) {
     transform: `translate(-50%, -50%) translateX(${x}px) translateZ(${z}px) rotateY(${rotateY}deg) scale(${scale})`,
     opacity,
     filter: `brightness(${brightness})`,
-    pointerEvents: "auto",
-  } as const;
+  };
 }
 
 function useCompactCarousel() {
@@ -97,7 +90,7 @@ export function ProductCarousel({ reducedMotion }: { reducedMotion: boolean }) {
       }}
     >
       <div
-        className={styles.stage}
+        className={`${styles.stage} ${compact ? styles.stageCompact : ""}`}
         id="sample-review"
         role="region"
         aria-roledescription="carousel"
@@ -110,8 +103,9 @@ export function ProductCarousel({ reducedMotion }: { reducedMotion: boolean }) {
             <button
               key={slide.id}
               type="button"
-              className={`${styles.slide} ${isFront ? styles.slideFront : styles.slideSide} appearance-none border-0 bg-transparent p-0 text-left`}
+              className={`${styles.slide} ${isFront ? styles.slideFront : styles.slideSide} ${compact ? styles.slideCompact : ""} appearance-none border-0 bg-transparent p-0 text-left`}
               style={slideStyle(rel, compact)}
+              hidden={compact && !isFront}
               tabIndex={isFront ? 0 : -1}
               aria-label={`${slide.label} preview`}
               aria-current={isFront ? "true" : undefined}
