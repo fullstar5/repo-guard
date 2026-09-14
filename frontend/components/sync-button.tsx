@@ -11,12 +11,14 @@ export function SyncButton({
   idleLabel = "Sync",
   pendingLabel = "Syncing…",
   className,
+  "aria-label": ariaLabel,
 }: {
   pending: boolean;
   onClick: () => void;
   idleLabel?: string;
   pendingLabel?: string;
   className?: string;
+  "aria-label"?: string;
 }) {
   return (
     <Button
@@ -25,8 +27,9 @@ export function SyncButton({
       onClick={onClick}
       disabled={pending}
       aria-busy={pending}
+      aria-label={ariaLabel ?? (pending ? pendingLabel : idleLabel)}
       className={cn(
-        "border border-[#22d3ee]/45 bg-[#18181b] text-[#fafafa] hover:border-[#22d3ee]/80 hover:bg-[#27272a] disabled:opacity-80",
+        "border border-[#22d3ee]/45 bg-[#18181b] text-[#fafafa] hover:border-[#22d3ee]/80 hover:bg-[#27272a] focus-visible:ring-[#22d3ee]/70 disabled:opacity-80",
         className,
       )}
     >

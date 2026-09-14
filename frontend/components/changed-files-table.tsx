@@ -40,7 +40,8 @@ export function ChangedFilesTable({
               <LeanTableCell>
                 <Link
                   href={hrefForFile(file)}
-                  className="font-mono text-sm text-[#fafafa] hover:text-[#67e8f9]"
+                  title={file.filename}
+                  className="block max-w-[36rem] truncate font-mono text-sm text-[#fafafa] hover:text-[#67e8f9] focus-visible:text-[#67e8f9] focus-visible:ring-2 focus-visible:ring-[#22d3ee]/70 focus-visible:outline-none"
                 >
                   {file.filename}
                 </Link>

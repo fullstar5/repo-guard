@@ -8,8 +8,8 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 
 import { AuthGate } from "@/components/auth-gate";
 import { DiffView, findingsToHighlights } from "@/components/diff-view";
+import { PanelSkeleton, QueryError } from "@/components/feedback";
 import { Breadcrumbs } from "@/components/page-chrome";
-import { InlineStatus } from "@/components/empty-state";
 import { SeverityBadge } from "@/components/status-badges";
 import { Button } from "@/components/ui/button";
 import {
@@ -143,8 +143,8 @@ export default function PullRequestFilePage() {
 
       <div className="sticky top-14 z-10 -mx-8 mb-6 flex flex-wrap items-center justify-between gap-3 border-y border-[#27272a] bg-[#09090b] px-8 py-3">
         <div className="min-w-0">
-          <p className="truncate font-mono text-sm text-[#fafafa]">
-            {file?.filename ?? "Loading file..."}
+          <p className="truncate font-mono text-sm text-[#fafafa]" title={file?.filename}>
+            {file?.filename ?? "Loading file…"}
           </p>
           {file ? (
             <p className="mt-1 font-mono text-xs tabular-nums">
@@ -178,15 +178,17 @@ export default function PullRequestFilePage() {
             </div>
           ) : null}
           <Button variant="outline" asChild>
-            <Link href={backHref}>Back to PR</Link>
+            <Link href={backHref} title="Back to pull request files">
+              Back to PR
+            </Link>
           </Button>
         </div>
       </div>
 
       {selectedJobNotFound ? (
-        <InlineStatus tone="danger">
-          Review job #{jobIdParam} was not found for this pull request.
-        </InlineStatus>
+        <QueryError
+          message={`Review job #${jobIdParam} was not found for this pull request.`}
+        />
       ) : null}
 
       <div
@@ -213,15 +215,15 @@ export default function PullRequestFilePage() {
                       })
                     }
                     className={cn(
-                      "flex flex-col items-start gap-1.5 border-b border-[#27272a] px-3 py-3 hover:bg-[#27272a]/50",
+                      "flex flex-col items-start gap-1.5 border-b border-[#27272a] px-3 py-3 hover:bg-[#27272a]/50 focus-visible:bg-[#27272a]/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#22d3ee]/70 focus-visible:outline-none",
                       index === scopedFindingIndex ? "bg-[#27272a] shadow-[inset_2px_0_0_#22d3ee]" : undefined,
                     )}
                   >
                     <SeverityBadge severity={finding.severity} />
-                    <span className="line-clamp-2 text-sm text-[#fafafa]">
+                    <span className="line-clamp-2 text-sm text-[#fafafa]" title={finding.summary}>
                       {finding.summary}
                     </span>
-                    <span className="font-mono text-[11px] text-[#71717a]">
+                    <span className="font-mono text-[11px] text-[#a1a1aa]">
                       {findingLocationLabel(finding)}
                     </span>
                   </a>
@@ -233,9 +235,12 @@ export default function PullRequestFilePage() {
 
         <div className="min-w-0">
           {fileQuery.isLoading ? (
-            <InlineStatus>Loading diff...</InlineStatus>
+            <PanelSkeleton className="min-h-[420px]" />
           ) : fileQuery.isError ? (
-            <InlineStatus tone="danger">Failed to load file diff.</InlineStatus>
+            <QueryError
+              message="Failed to load file diff."
+              onRetry={() => void fileQuery.refetch()}
+            />
           ) : (
             <DiffView
               patch={file?.patch ?? null}

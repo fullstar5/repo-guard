@@ -5,16 +5,13 @@ import { useQuery } from "@tanstack/react-query";
 import { isAxiosError } from "axios";
 
 import { AppShell } from "@/components/app-shell";
+import { AppShellSkeleton } from "@/components/feedback";
 import { LandingPage } from "@/components/landing/landing-page";
 import { authMeQueryOptions, isInitialAuthPending } from "@/lib/auth-session";
 import { getGitHubLoginUrl } from "@/lib/api";
 
 export function LoadingSession() {
-  return (
-    <main className="flex min-h-screen items-center justify-center bg-[#09090b]">
-      <p className="text-sm text-[#a1a1aa]">Loading session...</p>
-    </main>
-  );
+  return <AppShellSkeleton />;
 }
 
 export function AuthGate({ children }: { children: ReactNode }) {

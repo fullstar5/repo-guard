@@ -28,7 +28,7 @@ export function HistoricalJobBanner({
         ) : null}
       </p>
       <Button asChild variant="outline" size="sm">
-        <Link href={latestHref} onClick={onBackToLatest}>
+        <Link href={latestHref} onClick={onBackToLatest} className="focus-visible:ring-2 focus-visible:ring-[#22d3ee]/70">
           Back to latest
         </Link>
       </Button>
