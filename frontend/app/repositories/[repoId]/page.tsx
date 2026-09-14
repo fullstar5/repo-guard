@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { GitPullRequest, RefreshCw } from "lucide-react";
+import { GitPullRequest } from "lucide-react";
 
 import { AuthGate } from "@/components/auth-gate";
 import { EmptyState, InlineStatus } from "@/components/empty-state";
@@ -25,7 +25,7 @@ import {
   TableBody,
 } from "@/components/lean-table";
 import { PullRequestStateBadge } from "@/components/status-badges";
-import { Button } from "@/components/ui/button";
+import { SyncButton } from "@/components/sync-button";
 import { authMeQueryOptions } from "@/lib/auth-session";
 import { formatRelativeTime } from "@/lib/format";
 import { listPullRequests, syncPullRequests } from "@/lib/api";
@@ -81,14 +81,10 @@ export default function RepositoryPullRequestsPage() {
   }, [prsQuery.data, search, stateFilter]);
 
   const syncButton = (
-    <Button
-      variant="outline"
+    <SyncButton
+      pending={syncMutation.isPending}
       onClick={() => syncMutation.mutate()}
-      disabled={syncMutation.isPending}
-    >
-      <RefreshCw className="size-4" aria-hidden="true" />
-      {syncMutation.isPending ? "Syncing..." : "Sync"}
-    </Button>
+    />
   );
 
   return (

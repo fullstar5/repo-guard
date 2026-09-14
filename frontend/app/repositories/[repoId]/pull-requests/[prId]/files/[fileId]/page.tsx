@@ -21,6 +21,7 @@ import { authMeQueryOptions } from "@/lib/auth-session";
 import {
   findingLocationLabel,
   findingsForFile,
+  isHistoricalJobPin,
   pickSelectedReviewJob,
   resolveDisplayedReviewJob,
 } from "@/lib/review-findings";
@@ -62,7 +63,7 @@ export default function PullRequestFilePage() {
 
   const explicitJob = pickSelectedReviewJob(jobsQuery.data ?? [], jobIdParam);
   const selectedJobNotFound =
-    jobIdParam != null && jobsQuery.isSuccess && explicitJob == null;
+    isHistoricalJobPin(jobIdParam) && jobsQuery.isSuccess && explicitJob == null;
   const selectedJob = selectedJobNotFound
     ? undefined
     : resolveDisplayedReviewJob(jobsQuery.data ?? [], jobIdParam);
@@ -105,9 +106,7 @@ export default function PullRequestFilePage() {
     }
   }, [fileQuery.data, fileFindings, scopedFindingIndex, selectedJobNotFound]);
 
-  const backHref = `/repositories/${repositoryId}/pull-requests/${pullRequestId}${
-    selectedJob ? `?jobId=${selectedJob.id}&tab=files` : "?tab=files"
-  }`;
+  const backHref = `/repositories/${repositoryId}/pull-requests/${pullRequestId}?tab=files`;
 
   function goFinding(next: number) {
     if (fileFindings.length === 0) {

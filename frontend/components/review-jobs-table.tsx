@@ -22,6 +22,7 @@ export function ReviewJobsTable({
   jobs,
   selectedJobId,
   hrefForJob,
+  onSelectJob,
   onRetry,
   retryDisabled,
   retryPending,
@@ -29,6 +30,7 @@ export function ReviewJobsTable({
   jobs: ReviewJob[];
   selectedJobId?: number;
   hrefForJob: (job: ReviewJob) => string;
+  onSelectJob?: (job: ReviewJob) => void;
   onRetry: () => void;
   retryDisabled: boolean;
   retryPending: boolean;
@@ -62,6 +64,7 @@ export function ReviewJobsTable({
                 <LeanTableCell>
                   <Link
                     href={hrefForJob(job)}
+                    onClick={() => onSelectJob?.(job)}
                     className="font-mono text-sm text-[#fafafa] hover:text-[#67e8f9]"
                   >
                     job_{job.id}

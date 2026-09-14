@@ -1,24 +1,36 @@
 "use client";
 
 import Link from "next/link";
-import { useParams, useSearchParams } from "next/navigation";
+import { useState } from "react";
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 
 import { AuthGate } from "@/components/auth-gate";
 import { ChangedFilesTable } from "@/components/changed-files-table";
 import { EmptyState, InlineStatus } from "@/components/empty-state";
+import { HistoricalJobBanner } from "@/components/historical-job-banner";
 import { Breadcrumbs } from "@/components/page-chrome";
 import { ReviewJobsTable } from "@/components/review-jobs-table";
 import { ReviewWorkspace } from "@/components/review-workspace";
 import { PullRequestStateBadge } from "@/components/status-badges";
+import { SyncButton } from "@/components/sync-button";
 import { Button } from "@/components/ui/button";
 import {
+  isHistoricalJobPin,
+  latestReviewJob,
   pickSelectedReviewJob,
   resolveDisplayedReviewJob,
 } from "@/lib/review-findings";
 import { authMeQueryOptions } from "@/lib/auth-session";
 import { isActiveJob } from "@/lib/job-status";
+import {
+  parsePrTab,
+  prClearJobPinHref,
+  prJobHref,
+  prLatestReviewHref,
+  prTabHref,
+} from "@/lib/pr-query";
 import { cn } from "@/lib/utils";
 import { useRepository } from "@/lib/use-repository";
 import {
@@ -29,24 +41,19 @@ import {
   syncPullRequestFiles,
 } from "@/lib/api";
 
-type PrTab = "review" | "files" | "jobs";
-
-function parseTab(value: string | null): PrTab | null {
-  if (value === "review" || value === "files" || value === "jobs") {
-    return value;
-  }
-  return null;
-}
-
 export default function PullRequestReviewPage() {
   const params = useParams<{ repoId: string; prId: string }>();
   const searchParams = useSearchParams();
+  const pathname = usePathname();
+  const router = useRouter();
   const repositoryId = Number(params.repoId);
   const pullRequestId = Number(params.prId);
   const queryClient = useQueryClient();
   const idsReady = Number.isFinite(repositoryId) && Number.isFinite(pullRequestId);
   const jobIdParam = searchParams.get("jobId");
-  const requestedTab = parseTab(searchParams.get("tab"));
+  const historicalPin = isHistoricalJobPin(jobIdParam);
+  const requestedTab = parsePrTab(searchParams.get("tab"));
+  const [lastOpenedJobId, setLastOpenedJobId] = useState<number | undefined>();
 
   const meQuery = useQuery(authMeQueryOptions);
   const { repository } = useRepository(repositoryId);
@@ -86,30 +93,27 @@ export default function PullRequestReviewPage() {
       void queryClient.invalidateQueries({
         queryKey: ["pull-requests", pullRequestId, "review-jobs"],
       });
+      setLastOpenedJobId(undefined);
+      if (historicalPin) {
+        const next = prClearJobPinHref(searchParams);
+        router.replace(next ? `${pathname}${next}` : pathname, { scroll: false });
+      }
     },
   });
 
-  const hasActiveJob = (jobsQuery.data ?? []).some(isActiveJob);
+  const jobs = jobsQuery.data ?? [];
+  const hasActiveJob = jobs.some(isActiveJob);
   const fileCount = filesQuery.data?.length ?? 0;
-  const selectedJob = resolveDisplayedReviewJob(jobsQuery.data ?? [], jobIdParam);
+  const explicitJob = pickSelectedReviewJob(jobs, jobIdParam);
+  const latestJob = latestReviewJob(jobs);
+  const selectedJob = resolveDisplayedReviewJob(jobs, jobIdParam);
   const selectedJobNotFound =
-    jobIdParam != null && jobsQuery.isSuccess && pickSelectedReviewJob(jobsQuery.data ?? [], jobIdParam) == null;
+    historicalPin && jobsQuery.isSuccess && explicitJob == null;
   const hasFindings =
     selectedJob?.status === "completed" && (selectedJob.findings.length ?? 0) > 0;
-  const tab: PrTab = requestedTab ?? (hasFindings ? "review" : "files");
-
-  function tabHref(next: PrTab) {
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("tab", next);
-    return `?${params.toString()}`;
-  }
-
-  function jobHref(jobId: number, nextTab: PrTab = "review") {
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("tab", nextTab);
-    params.set("jobId", String(jobId));
-    return `?${params.toString()}`;
-  }
+  const tab = requestedTab ?? (historicalPin || hasFindings ? "review" : "files");
+  const latestReviewHref = prLatestReviewHref(searchParams);
+  const jobsHighlightId = explicitJob?.id ?? lastOpenedJobId ?? latestJob?.id;
 
   return (
     <AuthGate>
@@ -174,7 +178,7 @@ export default function PullRequestReviewPage() {
         {(["review", "files", "jobs"] as const).map((item) => (
           <Link
             key={item}
-            href={tabHref(item)}
+            href={prTabHref(searchParams, item)}
             className={cn(
               "rounded-md px-3 py-1.5 text-sm capitalize",
               tab === item
@@ -189,17 +193,34 @@ export default function PullRequestReviewPage() {
 
       {tab === "review" ? (
         selectedJobNotFound ? (
-          <InlineStatus tone="danger">
-            Review job #{jobIdParam} was not found for this pull request.
-          </InlineStatus>
+          <>
+            <HistoricalJobBanner
+              jobId={jobIdParam ?? ""}
+              latestHref={latestReviewHref}
+              onBackToLatest={() => setLastOpenedJobId(latestJob?.id)}
+            />
+            <InlineStatus tone="danger">
+              Review job #{jobIdParam} was not found for this pull request.
+            </InlineStatus>
+          </>
         ) : selectedJob ? (
-          <ReviewWorkspace
-            key={selectedJob.id}
-            job={selectedJob}
-            files={filesQuery.data ?? []}
-            repositoryId={repositoryId}
-            pullRequestId={pullRequestId}
-          />
+          <>
+            {historicalPin ? (
+              <HistoricalJobBanner
+                jobId={selectedJob.id}
+                updatedAt={selectedJob.updated_at}
+                latestHref={latestReviewHref}
+                onBackToLatest={() => setLastOpenedJobId(latestJob?.id)}
+              />
+            ) : null}
+            <ReviewWorkspace
+              key={selectedJob.id}
+              job={selectedJob}
+              files={filesQuery.data ?? []}
+              repositoryId={repositoryId}
+              pullRequestId={pullRequestId}
+            />
+          </>
         ) : (
           <EmptyState
             icon={<RefreshCw className="size-7 text-[#22d3ee]" aria-hidden="true" />}
@@ -231,21 +252,15 @@ export default function PullRequestReviewPage() {
           ) : (
             <>
               <div className="flex items-center justify-end">
-                <Button
-                  variant="outline"
+                <SyncButton
+                  pending={syncFilesMutation.isPending}
                   onClick={() => syncFilesMutation.mutate()}
-                  disabled={syncFilesMutation.isPending}
-                >
-                  <RefreshCw className="size-4" aria-hidden="true" />
-                  {syncFilesMutation.isPending ? "Syncing..." : "Sync"}
-                </Button>
+                />
               </div>
               <ChangedFilesTable
                 files={filesQuery.data ?? []}
                 hrefForFile={(file) =>
-                  `/repositories/${repositoryId}/pull-requests/${pullRequestId}/files/${file.id}${
-                    selectedJob ? `?jobId=${selectedJob.id}` : ""
-                  }`
+                  `/repositories/${repositoryId}/pull-requests/${pullRequestId}/files/${file.id}`
                 }
               />
             </>
@@ -258,13 +273,14 @@ export default function PullRequestReviewPage() {
           <InlineStatus>Loading review jobs...</InlineStatus>
         ) : jobsQuery.isError ? (
           <InlineStatus tone="danger">Failed to load review jobs.</InlineStatus>
-        ) : (jobsQuery.data?.length ?? 0) === 0 ? (
+        ) : jobs.length === 0 ? (
           <InlineStatus>No review jobs yet. Sync files, then run AI review.</InlineStatus>
         ) : (
           <ReviewJobsTable
-            jobs={jobsQuery.data ?? []}
-            selectedJobId={selectedJob?.id}
-            hrefForJob={(job) => jobHref(job.id, "review")}
+            jobs={jobs}
+            selectedJobId={jobsHighlightId}
+            hrefForJob={(job) => prJobHref(searchParams, job.id)}
+            onSelectJob={(job) => setLastOpenedJobId(job.id)}
             onRetry={() => createJobMutation.mutate()}
             retryDisabled={hasActiveJob || fileCount === 0}
             retryPending={createJobMutation.isPending}

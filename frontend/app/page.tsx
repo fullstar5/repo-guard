@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookMarked, RefreshCw } from "lucide-react";
+import { BookMarked } from "lucide-react";
 
 import { AuthGate } from "@/components/auth-gate";
 import { EmptyState, InlineStatus } from "@/components/empty-state";
@@ -23,7 +23,7 @@ import {
   TableBody,
 } from "@/components/lean-table";
 import { VisibilityBadge } from "@/components/status-badges";
-import { Button } from "@/components/ui/button";
+import { SyncButton } from "@/components/sync-button";
 import { authMeQueryOptions } from "@/lib/auth-session";
 import { formatRelativeTime } from "@/lib/format";
 import { listRepositories, syncRepositories } from "@/lib/api";
@@ -68,14 +68,10 @@ export default function HomePage() {
       <PageToolbar
         title="Repositories"
         action={
-          <Button
-            variant="outline"
+          <SyncButton
+            pending={syncMutation.isPending}
             onClick={() => syncMutation.mutate()}
-            disabled={syncMutation.isPending}
-          >
-            <RefreshCw className="size-4" aria-hidden="true" />
-            {syncMutation.isPending ? "Syncing..." : "Sync"}
-          </Button>
+          />
         }
       />
 
