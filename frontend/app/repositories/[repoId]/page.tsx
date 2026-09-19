@@ -4,10 +4,11 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { GitPullRequest, RefreshCw } from "lucide-react";
+import { GitPullRequest } from "lucide-react";
 
 import { AuthGate } from "@/components/auth-gate";
-import { EmptyState, InlineStatus } from "@/components/empty-state";
+import { EmptyState } from "@/components/empty-state";
+import { FilterEmpty, QueryError, TableSkeleton } from "@/components/feedback";
 import {
   Breadcrumbs,
   FilterBar,
@@ -25,7 +26,8 @@ import {
   TableBody,
 } from "@/components/lean-table";
 import { PullRequestStateBadge } from "@/components/status-badges";
-import { Button } from "@/components/ui/button";
+import { SyncButton } from "@/components/sync-button";
+import { useToast } from "@/components/toast";
 import { authMeQueryOptions } from "@/lib/auth-session";
 import { formatRelativeTime } from "@/lib/format";
 import { listPullRequests, syncPullRequests } from "@/lib/api";
@@ -35,6 +37,7 @@ export default function RepositoryPullRequestsPage() {
   const params = useParams<{ repoId: string }>();
   const repositoryId = Number(params.repoId);
   const queryClient = useQueryClient();
+  const toast = useToast();
   const [search, setSearch] = useState("");
   const [stateFilter, setStateFilter] = useState("all");
 
@@ -54,6 +57,10 @@ export default function RepositoryPullRequestsPage() {
         ["repositories", repositoryId, "pull-requests"],
         items,
       );
+      toast({ tone: "success", message: "Pull requests updated." });
+    },
+    onError: () => {
+      toast({ tone: "danger", message: "Couldn't sync pull requests." });
     },
   });
 
@@ -80,16 +87,13 @@ export default function RepositoryPullRequestsPage() {
     });
   }, [prsQuery.data, search, stateFilter]);
 
-  const syncButton = (
-    <Button
-      variant="outline"
-      onClick={() => syncMutation.mutate()}
-      disabled={syncMutation.isPending}
-    >
-      <RefreshCw className="size-4" aria-hidden="true" />
-      {syncMutation.isPending ? "Syncing..." : "Sync"}
-    </Button>
-  );
+  const total = prsQuery.data?.length ?? 0;
+  const toolbarMeta =
+    total === 0
+      ? undefined
+      : filtered.length === total
+        ? `${total} ${total === 1 ? "pull request" : "pull requests"}`
+        : `${filtered.length} of ${total} pull requests`;
 
   return (
     <AuthGate>
@@ -100,9 +104,19 @@ export default function RepositoryPullRequestsPage() {
         ]}
       />
 
-      <PageToolbar title="Pull requests" action={syncButton} />
+      <PageToolbar
+        title="Pull requests"
+        meta={toolbarMeta}
+        action={
+          <SyncButton
+            pending={syncMutation.isPending}
+            onClick={() => syncMutation.mutate()}
+            aria-label={syncMutation.isPending ? "Syncing pull requests" : "Sync pull requests"}
+          />
+        }
+      />
 
-      {(prsQuery.data?.length ?? 0) > 0 ? (
+      {total > 0 ? (
         <FilterBar>
           <SearchInput
             value={search}
@@ -112,6 +126,7 @@ export default function RepositoryPullRequestsPage() {
           <FilterSelect
             value={stateFilter}
             onChange={setStateFilter}
+            aria-label="Filter by pull request state"
             options={[
               { value: "all", label: "All" },
               { value: "open", label: "Open" },
@@ -123,10 +138,13 @@ export default function RepositoryPullRequestsPage() {
       ) : null}
 
       {prsQuery.isLoading ? (
-        <InlineStatus>Loading pull requests...</InlineStatus>
+        <TableSkeleton />
       ) : prsQuery.isError ? (
-        <InlineStatus tone="danger">Failed to load pull requests.</InlineStatus>
-      ) : (prsQuery.data?.length ?? 0) === 0 ? (
+        <QueryError
+          message="Failed to load pull requests."
+          onRetry={() => void prsQuery.refetch()}
+        />
+      ) : total === 0 ? (
         <EmptyState
           icon={<GitPullRequest className="size-7 text-[#22d3ee]" aria-hidden="true" />}
           title="No pull requests yet"
@@ -136,7 +154,10 @@ export default function RepositoryPullRequestsPage() {
           actionPending={syncMutation.isPending}
         />
       ) : filtered.length === 0 ? (
-        <InlineStatus>No pull requests match the current filters.</InlineStatus>
+        <FilterEmpty
+          title="No matching pull requests"
+          hint="Try a different search or state filter."
+        />
       ) : (
         <LeanTable>
           <Table>
@@ -150,13 +171,14 @@ export default function RepositoryPullRequestsPage() {
             <TableBody>
               {filtered.map((pr) => (
                 <LeanTableRow key={pr.id}>
-                  <LeanTableCell>
+                  <LeanTableCell className="max-w-[36rem]">
                     <Link
                       href={`/repositories/${repositoryId}/pull-requests/${pr.id}`}
-                      className="text-sm font-medium text-[#fafafa] hover:text-[#67e8f9]"
+                      title={`#${pr.number} ${pr.title}`}
+                      className="flex min-w-0 items-baseline text-sm font-medium text-[#fafafa] hover:text-[#67e8f9] focus-visible:text-[#67e8f9] focus-visible:ring-2 focus-visible:ring-[#22d3ee]/70 focus-visible:outline-none"
                     >
-                      <span className="mr-2 text-[#a1a1aa]">#{pr.number}</span>
-                      {pr.title}
+                      <span className="mr-2 shrink-0 text-[#a1a1aa]">#{pr.number}</span>
+                      <span className="truncate">{pr.title}</span>
                     </Link>
                   </LeanTableCell>
                   <LeanTableCell>

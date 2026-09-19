@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import { Button } from "@/components/ui/button";
+import { SyncButton } from "@/components/sync-button";
 import { cn } from "@/lib/utils";
 
 export function EmptyState({
@@ -26,13 +26,12 @@ export function EmptyState({
       <p className="text-base font-medium text-[#fafafa]">{title}</p>
       <p className="mt-2 max-w-sm text-sm text-[#a1a1aa]">{hint}</p>
       {actionLabel && onAction ? (
-        <Button
+        <SyncButton
           className="mt-6"
+          pending={Boolean(actionPending)}
           onClick={onAction}
-          disabled={actionPending}
-        >
-          {actionPending ? "Syncing..." : actionLabel}
-        </Button>
+          idleLabel={actionLabel}
+        />
       ) : null}
     </div>
   );

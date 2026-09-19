@@ -1,24 +1,38 @@
 "use client";
 
 import Link from "next/link";
-import { useParams, useSearchParams } from "next/navigation";
+import { useState, type ReactNode } from "react";
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 
 import { AuthGate } from "@/components/auth-gate";
 import { ChangedFilesTable } from "@/components/changed-files-table";
-import { EmptyState, InlineStatus } from "@/components/empty-state";
+import { EmptyState } from "@/components/empty-state";
+import { FilterEmpty, PanelSkeleton, QueryError, TableSkeleton } from "@/components/feedback";
+import { HistoricalJobBanner } from "@/components/historical-job-banner";
 import { Breadcrumbs } from "@/components/page-chrome";
 import { ReviewJobsTable } from "@/components/review-jobs-table";
 import { ReviewWorkspace } from "@/components/review-workspace";
 import { PullRequestStateBadge } from "@/components/status-badges";
+import { SyncButton } from "@/components/sync-button";
+import { useToast } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import {
+  isHistoricalJobPin,
+  latestReviewJob,
   pickSelectedReviewJob,
   resolveDisplayedReviewJob,
 } from "@/lib/review-findings";
 import { authMeQueryOptions } from "@/lib/auth-session";
 import { isActiveJob } from "@/lib/job-status";
+import {
+  parsePrTab,
+  prClearJobPinHref,
+  prJobHref,
+  prLatestReviewHref,
+  prTabHref,
+} from "@/lib/pr-query";
 import { cn } from "@/lib/utils";
 import { useRepository } from "@/lib/use-repository";
 import {
@@ -29,24 +43,44 @@ import {
   syncPullRequestFiles,
 } from "@/lib/api";
 
-type PrTab = "review" | "files" | "jobs";
-
-function parseTab(value: string | null): PrTab | null {
-  if (value === "review" || value === "files" || value === "jobs") {
-    return value;
-  }
-  return null;
+function TabPanel({
+  id,
+  labelledBy,
+  active,
+  children,
+}: {
+  id: string;
+  labelledBy: string;
+  active: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      role="tabpanel"
+      id={id}
+      aria-labelledby={labelledBy}
+      hidden={!active}
+      {...(!active ? { inert: true } : {})}
+    >
+      {children}
+    </div>
+  );
 }
 
 export default function PullRequestReviewPage() {
   const params = useParams<{ repoId: string; prId: string }>();
   const searchParams = useSearchParams();
+  const pathname = usePathname();
+  const router = useRouter();
+  const toast = useToast();
   const repositoryId = Number(params.repoId);
   const pullRequestId = Number(params.prId);
   const queryClient = useQueryClient();
   const idsReady = Number.isFinite(repositoryId) && Number.isFinite(pullRequestId);
   const jobIdParam = searchParams.get("jobId");
-  const requestedTab = parseTab(searchParams.get("tab"));
+  const historicalPin = isHistoricalJobPin(jobIdParam);
+  const requestedTab = parsePrTab(searchParams.get("tab"));
+  const [lastOpenedJobId, setLastOpenedJobId] = useState<number | undefined>();
 
   const meQuery = useQuery(authMeQueryOptions);
   const { repository } = useRepository(repositoryId);
@@ -77,6 +111,10 @@ export default function PullRequestReviewPage() {
     mutationFn: () => syncPullRequestFiles(pullRequestId),
     onSuccess: (items) => {
       queryClient.setQueryData(["pull-requests", pullRequestId, "files"], items);
+      toast({ tone: "success", message: "Files updated." });
+    },
+    onError: () => {
+      toast({ tone: "danger", message: "Couldn't sync files." });
     },
   });
 
@@ -86,30 +124,39 @@ export default function PullRequestReviewPage() {
       void queryClient.invalidateQueries({
         queryKey: ["pull-requests", pullRequestId, "review-jobs"],
       });
+      setLastOpenedJobId(undefined);
+      if (historicalPin) {
+        const next = prClearJobPinHref(searchParams);
+        router.replace(next ? `${pathname}${next}` : pathname, { scroll: false });
+      }
+      toast({ tone: "success", message: "Review queued." });
+    },
+    onError: () => {
+      toast({ tone: "danger", message: "Couldn't start AI review." });
     },
   });
 
-  const hasActiveJob = (jobsQuery.data ?? []).some(isActiveJob);
+  const jobs = jobsQuery.data ?? [];
+  const hasActiveJob = jobs.some(isActiveJob);
   const fileCount = filesQuery.data?.length ?? 0;
-  const selectedJob = resolveDisplayedReviewJob(jobsQuery.data ?? [], jobIdParam);
+  const explicitJob = pickSelectedReviewJob(jobs, jobIdParam);
+  const latestJob = latestReviewJob(jobs);
+  const selectedJob = resolveDisplayedReviewJob(jobs, jobIdParam);
   const selectedJobNotFound =
-    jobIdParam != null && jobsQuery.isSuccess && pickSelectedReviewJob(jobsQuery.data ?? [], jobIdParam) == null;
+    historicalPin && jobsQuery.isSuccess && explicitJob == null;
   const hasFindings =
     selectedJob?.status === "completed" && (selectedJob.findings.length ?? 0) > 0;
-  const tab: PrTab = requestedTab ?? (hasFindings ? "review" : "files");
-
-  function tabHref(next: PrTab) {
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("tab", next);
-    return `?${params.toString()}`;
-  }
-
-  function jobHref(jobId: number, nextTab: PrTab = "review") {
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("tab", nextTab);
-    params.set("jobId", String(jobId));
-    return `?${params.toString()}`;
-  }
+  const tab = requestedTab ?? (historicalPin || hasFindings ? "review" : "files");
+  const latestReviewHref = prLatestReviewHref(searchParams);
+  const jobsHighlightId = explicitJob?.id ?? lastOpenedJobId ?? latestJob?.id;
+  const runDisabled =
+    createJobMutation.isPending || hasActiveJob || fileCount === 0;
+  const runTitle =
+    fileCount === 0
+      ? "Sync files before running a review"
+      : hasActiveJob
+        ? "A review is already running"
+        : undefined;
 
   return (
     <AuthGate>
@@ -126,7 +173,10 @@ export default function PullRequestReviewPage() {
 
       <section className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="text-2xl font-semibold tracking-tight text-[#fafafa]">
+          <h1
+            className="truncate text-2xl font-semibold tracking-tight text-[#fafafa]"
+            title={prQuery.data?.title}
+          >
             {prQuery.data?.title ?? "Pull request"}
           </h1>
           {prQuery.data ? (
@@ -135,11 +185,17 @@ export default function PullRequestReviewPage() {
                 state={prQuery.data.state}
                 isDraft={prQuery.data.is_draft}
               />
-              <span className="rounded-md bg-[#18181b] px-2 py-0.5 font-mono text-xs text-[#a1a1aa] ring-1 ring-[#3f3f46]">
+              <span
+                className="rounded-md bg-[#18181b] px-2 py-0.5 font-mono text-xs text-[#d4d4d8] ring-1 ring-[#3f3f46]"
+                title={prQuery.data.base_branch}
+              >
                 {prQuery.data.base_branch}
               </span>
               <span className="text-[#3f3f46]">→</span>
-              <span className="rounded-md bg-[#18181b] px-2 py-0.5 font-mono text-xs text-[#a1a1aa] ring-1 ring-[#3f3f46]">
+              <span
+                className="rounded-md bg-[#18181b] px-2 py-0.5 font-mono text-xs text-[#d4d4d8] ring-1 ring-[#3f3f46]"
+                title={prQuery.data.head_branch}
+              >
                 {prQuery.data.head_branch}
               </span>
             </div>
@@ -155,28 +211,37 @@ export default function PullRequestReviewPage() {
           ) : null}
           <Button
             onClick={() => createJobMutation.mutate()}
-            disabled={
-              createJobMutation.isPending || hasActiveJob || fileCount === 0
+            disabled={runDisabled}
+            title={runTitle}
+            aria-label={
+              hasActiveJob
+                ? "Review running"
+                : fileCount === 0
+                  ? "Run AI review, sync files first"
+                  : "Run AI review"
             }
           >
-            {hasActiveJob ? "Review running..." : "Run AI review"}
+            {hasActiveJob ? "Review running…" : "Run AI review"}
           </Button>
         </div>
       </section>
 
-      {createJobMutation.isError ? (
-        <div className="mb-4">
-          <InlineStatus tone="danger">Failed to enqueue review job.</InlineStatus>
-        </div>
-      ) : null}
-
-      <div className="mb-6 inline-flex rounded-lg border border-[#3f3f46] bg-[#18181b] p-1">
+      <div
+        role="tablist"
+        aria-label="Pull request sections"
+        className="mb-6 inline-flex rounded-lg border border-[#3f3f46] bg-[#18181b] p-1"
+      >
         {(["review", "files", "jobs"] as const).map((item) => (
           <Link
             key={item}
-            href={tabHref(item)}
+            id={`pr-tab-${item}`}
+            role="tab"
+            aria-selected={tab === item}
+            aria-controls={`pr-panel-${item}`}
+            href={prTabHref(searchParams, item)}
+            scroll={false}
             className={cn(
-              "rounded-md px-3 py-1.5 text-sm capitalize",
+              "rounded-md px-3 py-1.5 text-sm capitalize focus-visible:ring-2 focus-visible:ring-[#22d3ee]/70 focus-visible:outline-none",
               tab === item
                 ? "bg-[#27272a] text-[#fafafa]"
                 : "text-[#a1a1aa] hover:text-[#fafafa]",
@@ -187,90 +252,119 @@ export default function PullRequestReviewPage() {
         ))}
       </div>
 
-      {tab === "review" ? (
-        selectedJobNotFound ? (
-          <InlineStatus tone="danger">
-            Review job #{jobIdParam} was not found for this pull request.
-          </InlineStatus>
-        ) : selectedJob ? (
-          <ReviewWorkspace
-            key={selectedJob.id}
-            job={selectedJob}
-            files={filesQuery.data ?? []}
-            repositoryId={repositoryId}
-            pullRequestId={pullRequestId}
-          />
-        ) : (
-          <EmptyState
-            icon={<RefreshCw className="size-7 text-[#22d3ee]" aria-hidden="true" />}
-            title="No review yet"
-            hint={
-              fileCount === 0
-                ? "Sync files, then run an AI review."
-                : "Run AI review with the workspace default model."
-            }
-          />
-        )
-      ) : null}
-
-      {tab === "files" ? (
-        <div className="flex flex-col gap-4">
-          {filesQuery.isLoading ? (
-            <InlineStatus>Loading files...</InlineStatus>
-          ) : filesQuery.isError ? (
-            <InlineStatus tone="danger">Failed to load files.</InlineStatus>
-          ) : (filesQuery.data?.length ?? 0) === 0 ? (
-            <EmptyState
-              icon={<RefreshCw className="size-7 text-[#22d3ee]" aria-hidden="true" />}
-              title="No files synced yet"
-              hint="Sync files before running a review."
-              actionLabel="Sync"
-              onAction={() => syncFilesMutation.mutate()}
-              actionPending={syncFilesMutation.isPending}
+      <TabPanel id="pr-panel-review" labelledBy="pr-tab-review" active={tab === "review"}>
+          {jobsQuery.isLoading ? (
+            <PanelSkeleton />
+          ) : jobsQuery.isError ? (
+            <QueryError
+              message="Failed to load review jobs."
+              onRetry={() => void jobsQuery.refetch()}
             />
-          ) : (
+          ) : selectedJobNotFound ? (
             <>
-              <div className="flex items-center justify-end">
-                <Button
-                  variant="outline"
-                  onClick={() => syncFilesMutation.mutate()}
-                  disabled={syncFilesMutation.isPending}
-                >
-                  <RefreshCw className="size-4" aria-hidden="true" />
-                  {syncFilesMutation.isPending ? "Syncing..." : "Sync"}
-                </Button>
-              </div>
-              <ChangedFilesTable
+              <HistoricalJobBanner
+                jobId={jobIdParam ?? ""}
+                latestHref={latestReviewHref}
+                onBackToLatest={() => setLastOpenedJobId(latestJob?.id)}
+              />
+              <QueryError message={`Review job #${jobIdParam} was not found for this pull request.`} />
+            </>
+          ) : selectedJob ? (
+            <>
+              {historicalPin ? (
+                <HistoricalJobBanner
+                  jobId={selectedJob.id}
+                  updatedAt={selectedJob.updated_at}
+                  latestHref={latestReviewHref}
+                  onBackToLatest={() => setLastOpenedJobId(latestJob?.id)}
+                />
+              ) : null}
+              <ReviewWorkspace
+                key={selectedJob.id}
+                job={selectedJob}
                 files={filesQuery.data ?? []}
-                hrefForFile={(file) =>
-                  `/repositories/${repositoryId}/pull-requests/${pullRequestId}/files/${file.id}${
-                    selectedJob ? `?jobId=${selectedJob.id}` : ""
-                  }`
-                }
+                repositoryId={repositoryId}
+                pullRequestId={pullRequestId}
               />
             </>
+          ) : (
+            <EmptyState
+              icon={<RefreshCw className="size-7 text-[#22d3ee]" aria-hidden="true" />}
+              title="No review yet"
+              hint={
+                fileCount === 0
+                  ? "Sync files, then run an AI review."
+                  : "Run AI review with the workspace default model."
+              }
+            />
           )}
-        </div>
-      ) : null}
+        </TabPanel>
 
-      {tab === "jobs" ? (
-        jobsQuery.isLoading ? (
-          <InlineStatus>Loading review jobs...</InlineStatus>
-        ) : jobsQuery.isError ? (
-          <InlineStatus tone="danger">Failed to load review jobs.</InlineStatus>
-        ) : (jobsQuery.data?.length ?? 0) === 0 ? (
-          <InlineStatus>No review jobs yet. Sync files, then run AI review.</InlineStatus>
-        ) : (
-          <ReviewJobsTable
-            jobs={jobsQuery.data ?? []}
-            selectedJobId={selectedJob?.id}
-            hrefForJob={(job) => jobHref(job.id, "review")}
-            onRetry={() => createJobMutation.mutate()}
-            retryDisabled={hasActiveJob || fileCount === 0}
-            retryPending={createJobMutation.isPending}
-          />
-        )
-      ) : null}
+      <TabPanel id="pr-panel-files" labelledBy="pr-tab-files" active={tab === "files"}>
+          <div className="flex flex-col gap-4">
+            {filesQuery.isLoading ? (
+              <TableSkeleton columns={3} rows={5} />
+            ) : filesQuery.isError ? (
+              <QueryError
+                message="Failed to load files."
+                onRetry={() => void filesQuery.refetch()}
+              />
+            ) : (filesQuery.data?.length ?? 0) === 0 ? (
+              <EmptyState
+                icon={<RefreshCw className="size-7 text-[#22d3ee]" aria-hidden="true" />}
+                title="No files synced yet"
+                hint="Sync files before running a review."
+                actionLabel="Sync"
+                onAction={() => syncFilesMutation.mutate()}
+                actionPending={syncFilesMutation.isPending}
+              />
+            ) : (
+              <>
+                <div className="flex items-center justify-end">
+                  <SyncButton
+                    pending={syncFilesMutation.isPending}
+                    onClick={() => syncFilesMutation.mutate()}
+                    aria-label={
+                      syncFilesMutation.isPending ? "Syncing files" : "Sync files"
+                    }
+                  />
+                </div>
+                <ChangedFilesTable
+                  files={filesQuery.data ?? []}
+                  hrefForFile={(file) =>
+                    `/repositories/${repositoryId}/pull-requests/${pullRequestId}/files/${file.id}`
+                  }
+                />
+              </>
+            )}
+          </div>
+        </TabPanel>
+
+      <TabPanel id="pr-panel-jobs" labelledBy="pr-tab-jobs" active={tab === "jobs"}>
+          {jobsQuery.isLoading ? (
+            <TableSkeleton columns={6} rows={4} />
+          ) : jobsQuery.isError ? (
+            <QueryError
+              message="Failed to load review jobs."
+              onRetry={() => void jobsQuery.refetch()}
+            />
+          ) : jobs.length === 0 ? (
+            <FilterEmpty
+              title="No review jobs yet"
+              hint="Sync files, then run an AI review."
+            />
+          ) : (
+            <ReviewJobsTable
+              jobs={jobs}
+              selectedJobId={jobsHighlightId}
+              hrefForJob={(job) => prJobHref(searchParams, job.id)}
+              onSelectJob={(job) => setLastOpenedJobId(job.id)}
+              onRetry={() => createJobMutation.mutate()}
+              retryDisabled={hasActiveJob || fileCount === 0}
+              retryPending={createJobMutation.isPending}
+            />
+          )}
+        </TabPanel>
     </AuthGate>
   );
 }

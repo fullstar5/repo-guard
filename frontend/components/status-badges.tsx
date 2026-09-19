@@ -8,7 +8,7 @@ const SEVERITY_CLASS: Record<ReviewFindingSeverity, string> = {
   critical: "bg-[#7f1d1d]/80 text-[#fecaca] ring-1 ring-[#7f1d1d]",
   high: "bg-[#9a3412]/80 text-[#fed7aa] ring-1 ring-[#9a3412]",
   medium: "bg-[#854d0e]/70 text-[#fde68a] ring-1 ring-[#854d0e]",
-  low: "bg-[#27272a] text-[#d4d4d8] ring-1 ring-[#3f3f46]",
+  low: "bg-[#27272a] text-[#e4e4e7] ring-1 ring-[#52525b]",
 };
 
 export function SeverityBadge({
@@ -35,7 +35,7 @@ const SEVERITY_COUNT_CLASS: Record<ReviewFindingSeverity, string> = {
   critical: "bg-[#7f1d1d]/80 text-[#fecaca]",
   high: "bg-[#9a3412]/80 text-[#fed7aa]",
   medium: "bg-[#854d0e]/70 text-[#fde68a]",
-  low: "bg-[#27272a] text-[#d4d4d8]",
+  low: "bg-[#27272a] text-[#e4e4e7] ring-1 ring-[#52525b]",
 };
 
 export function SeverityCountChip({
@@ -85,8 +85,8 @@ export function PullRequestStateBadge({
 }) {
   if (isDraft) {
     return (
-      <span className="inline-flex items-center gap-1.5 rounded-full bg-[#27272a] px-2.5 py-0.5 text-xs font-medium text-[#a1a1aa] ring-1 ring-[#3f3f46]">
-        <span className="size-1.5 rounded-full bg-[#a1a1aa]" />
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-[#27272a] px-2.5 py-0.5 text-xs font-medium text-[#d4d4d8] ring-1 ring-[#52525b]">
+        <span className="size-1.5 rounded-full bg-[#d4d4d8]" />
         Draft
       </span>
     );
@@ -115,22 +115,22 @@ const JOB_STATUS_CLASS: Record<
 > = {
   pending: {
     label: "Pending",
-    className: "bg-[#27272a] text-[#a1a1aa]",
-    dot: "bg-[#a1a1aa]",
+    className: "bg-[#27272a] text-[#d4d4d8] ring-1 ring-[#52525b]",
+    dot: "bg-[#d4d4d8]",
   },
   processing: {
-    label: "Processing...",
-    className: "bg-[#164e63]/50 text-[#67e8f9]",
+    label: "Processing…",
+    className: "bg-[#164e63]/50 text-[#67e8f9] ring-1 ring-[#0e7490]/70",
     dot: "bg-[#22d3ee]",
   },
   success: {
     label: "Success",
-    className: "bg-[#14532d]/50 text-[#86efac]",
+    className: "bg-[#14532d]/50 text-[#86efac] ring-1 ring-[#166534]/80",
     dot: "bg-[#4ade80]",
   },
   failed: {
     label: "Failed",
-    className: "bg-[#7f1d1d]/45 text-[#fca5a5]",
+    className: "bg-[#7f1d1d]/45 text-[#fca5a5] ring-1 ring-[#991b1b]/80",
     dot: "bg-[#f87171]",
   },
 };

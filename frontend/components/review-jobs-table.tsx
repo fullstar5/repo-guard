@@ -22,6 +22,7 @@ export function ReviewJobsTable({
   jobs,
   selectedJobId,
   hrefForJob,
+  onSelectJob,
   onRetry,
   retryDisabled,
   retryPending,
@@ -29,6 +30,7 @@ export function ReviewJobsTable({
   jobs: ReviewJob[];
   selectedJobId?: number;
   hrefForJob: (job: ReviewJob) => string;
+  onSelectJob?: (job: ReviewJob) => void;
   onRetry: () => void;
   retryDisabled: boolean;
   retryPending: boolean;
@@ -62,7 +64,8 @@ export function ReviewJobsTable({
                 <LeanTableCell>
                   <Link
                     href={hrefForJob(job)}
-                    className="font-mono text-sm text-[#fafafa] hover:text-[#67e8f9]"
+                    onClick={() => onSelectJob?.(job)}
+                    className="font-mono text-sm text-[#fafafa] hover:text-[#67e8f9] focus-visible:text-[#67e8f9] focus-visible:ring-2 focus-visible:ring-[#22d3ee]/70 focus-visible:outline-none"
                   >
                     job_{job.id}
                   </Link>
@@ -88,9 +91,10 @@ export function ReviewJobsTable({
                       onClick={onRetry}
                       disabled={retryDisabled || retryPending}
                       className={cn(
-                        "text-sm text-[#a1a1aa] hover:text-[#fafafa]",
+                        "rounded-sm text-sm text-[#a1a1aa] hover:text-[#fafafa] focus-visible:text-[#fafafa] focus-visible:ring-2 focus-visible:ring-[#22d3ee]/70 focus-visible:outline-none",
                         (retryDisabled || retryPending) && "cursor-not-allowed opacity-40",
                       )}
+                      aria-label={`Retry job ${job.id}`}
                     >
                       Retry
                     </button>

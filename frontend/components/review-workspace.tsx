@@ -6,8 +6,9 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 
 import { snippetAround } from "@/components/diff-view";
-import { SeverityBadge, SeverityCountChip } from "@/components/status-badges";
+import { QueryError, RunningPanel } from "@/components/feedback";
 import { InlineStatus } from "@/components/empty-state";
+import { SeverityBadge, SeverityCountChip } from "@/components/status-badges";
 import { api, type PullRequestFile, type PullRequestFileDetail, type ReviewFinding, type ReviewFindingSeverity, type ReviewJob } from "@/lib/api";
 import { formatRelativeTime } from "@/lib/format";
 import { toJobUiStatus } from "@/lib/job-status";
@@ -79,15 +80,15 @@ export function ReviewWorkspace({
 
   if (job.status === "pending" || job.status === "processing") {
     return (
-      <InlineStatus>Review is still running. Findings appear when this job finishes.</InlineStatus>
+      <RunningPanel>
+        Review is running. Findings appear when this job finishes.
+      </RunningPanel>
     );
   }
 
   if (job.status === "failed") {
     return (
-      <InlineStatus tone="danger">
-        {job.error_message?.trim() || "Review job failed."}
-      </InlineStatus>
+      <QueryError message={job.error_message?.trim() || "Review job failed."} />
     );
   }
 
@@ -104,8 +105,6 @@ export function ReviewWorkspace({
           ) : null}
         </div>
         <p className="text-sm text-[#a1a1aa]">
-          Last
-          <span className="mx-1.5 text-[#3f3f46]">·</span>
           <span className="text-[#fafafa]">
             {uiStatus === "success" ? "Success" : uiStatus}
           </span>
@@ -122,8 +121,9 @@ export function ReviewWorkspace({
             <div className="flex items-center justify-between gap-3 border-b border-[#27272a] px-3 py-2.5">
               <h2 className="text-sm font-medium">Findings</h2>
               <select
-                className="h-8 rounded-md border border-[#3f3f46] bg-[#09090b] px-2 text-xs text-[#fafafa] outline-none"
+                className="h-8 rounded-md border border-[#3f3f46] bg-[#09090b] px-2 text-xs text-[#fafafa] outline-none focus-visible:ring-2 focus-visible:ring-[#22d3ee]/70"
                 value={severity}
+                aria-label="Filter findings by severity"
                 onChange={(event) => {
                   setSeverity(event.target.value as ReviewFindingSeverity | "all");
                 }}
@@ -142,17 +142,17 @@ export function ReviewWorkspace({
                     href={findingHref(finding.id)}
                     scroll={false}
                     className={cn(
-                      "flex w-full flex-col items-start gap-1.5 border-b border-[#27272a] px-3 py-3 text-left hover:bg-[#27272a]/50",
+                      "flex w-full flex-col items-start gap-1.5 border-b border-[#27272a] px-3 py-3 text-left hover:bg-[#27272a]/50 focus-visible:bg-[#27272a]/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#22d3ee]/70 focus-visible:outline-none",
                       selected?.id === finding.id
                         ? "bg-[#27272a] shadow-[inset_2px_0_0_#22d3ee]"
                         : undefined,
                     )}
                   >
                     <SeverityBadge severity={finding.severity} />
-                    <span className="line-clamp-2 text-sm text-[#fafafa]">
+                    <span className="line-clamp-2 text-sm text-[#fafafa]" title={finding.summary}>
                       {finding.summary}
                     </span>
-                    <span className="truncate font-mono text-[11px] text-[#71717a]">
+                    <span className="truncate font-mono text-[11px] text-[#a1a1aa]">
                       {findingLocationLabel(finding)}
                     </span>
                   </Link>
@@ -210,7 +210,7 @@ function FindingDetail({
       <div className="flex flex-wrap items-center gap-2">
         <SeverityBadge severity={finding.severity} />
       </div>
-      <h3 className="text-lg font-medium text-[#fafafa]">{finding.summary}</h3>
+      <h3 className="text-lg font-medium text-[#fafafa]" title={finding.summary}>{finding.summary}</h3>
       {href ? (
         <Link
           href={href}

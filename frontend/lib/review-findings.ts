@@ -16,12 +16,18 @@ export const SEVERITY_ORDER: Record<ReviewFindingSeverity, number> = {
 };
 
 
+export function isHistoricalJobPin(
+    jobIdParam: string | null,
+): jobIdParam is string {
+    return jobIdParam != null && jobIdParam.length > 0;
+}
+
 export function pickSelectedReviewJob(
     jobs: ReviewJob[],
     jobIdParam: string | null,
 ): ReviewJob | undefined {
     // find the job that user ask to view
-    if (!jobIdParam) {
+    if (!isHistoricalJobPin(jobIdParam)) {
         return undefined;
     }
     const jobId = Number(jobIdParam);
@@ -31,15 +37,8 @@ export function pickSelectedReviewJob(
     return jobs.find((job) => job.id === jobId);
 }
 
-/** Latest successful job, else the newest job. Used when the URL has no jobId. */
-export function resolveDisplayedReviewJob(
-    jobs: ReviewJob[],
-    jobIdParam: string | null,
-): ReviewJob | undefined {
-    const explicit = pickSelectedReviewJob(jobs, jobIdParam);
-    if (explicit) {
-        return explicit;
-    }
+/** Latest completed job, else the newest job. Default Review binding. */
+export function latestReviewJob(jobs: ReviewJob[]): ReviewJob | undefined {
     if (jobs.length === 0) {
         return undefined;
     }
@@ -49,6 +48,18 @@ export function resolveDisplayedReviewJob(
         (left, right) =>
             new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime(),
     )[0];
+}
+
+/** Pinned job when `?jobId=` is set; otherwise the latest default job. */
+export function resolveDisplayedReviewJob(
+    jobs: ReviewJob[],
+    jobIdParam: string | null,
+): ReviewJob | undefined {
+    const explicit = pickSelectedReviewJob(jobs, jobIdParam);
+    if (explicit) {
+        return explicit;
+    }
+    return latestReviewJob(jobs);
 }
 
 
