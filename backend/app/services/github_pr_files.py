@@ -135,3 +135,39 @@ async def get_PR_file_for_user(
         )
     )
     return result.scalar_one_or_none()
+
+
+async def fetch_github_file_text(
+    http_client: httpx.AsyncClient,
+    access_token: str,
+    contents_url: str | None,
+    *,
+    owner_login: str | None = None,
+    repo_name: str | None = None,
+    blob_sha: str | None = None,
+) -> str | None:
+    """Load the file blob GitHub stored on the PR (head version)."""
+    headers = {
+        "Accept": "application/vnd.github.raw",
+        "Authorization": f"Bearer {access_token}",
+        "X-GitHub-Api-Version": "2026-03-10",
+    }
+
+    if contents_url:
+        response = await http_client.get(contents_url, headers=headers)
+        if response.status_code == 200:
+            return response.text
+        if response.status_code not in {403, 404}:
+            response.raise_for_status()
+
+    if owner_login and repo_name and blob_sha:
+        response = await http_client.get(
+            f"https://api.github.com/repos/{owner_login}/{repo_name}/git/blobs/{blob_sha}",
+            headers=headers,
+        )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return response.text
+
+    return None
