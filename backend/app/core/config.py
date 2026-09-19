@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     celery_task_retry_backoff_seconds: int = 5   # wait for x second before next try
     celery_task_retry_backoff_max: int = 300   #
     celery_task_soft_time_limit: int = 3600   # 1h wall clock; retry the whole job once
-    celery_task_time_limit: int = 3660   # slightly above soft so retry can be scheduled
+    celery_task_time_limit: int = 4200   # above soft so retry can enqueue and persist
 
     celery_task_reclaim_interval_seconds: float = 21600   # scan stale jobs every 6 hours
     review_job_stale_processing_seconds: int = 10800   # > 2h so a 1h run + 1 retry is not reclaimed

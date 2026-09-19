@@ -5,7 +5,6 @@ from pathlib import PurePosixPath
 from app.models.pr_file import PRFile
 
 
-
 # Paths GitHub never needs an LLM to read. Matched against POSIX paths
 # from the GitHub files API (always forward slashes).
 IGNORED_FILENAMES = frozenset(
@@ -64,17 +63,25 @@ IGNORED_SUFFIXES = (
 )
 
 
+HUNK_HEADER = re.compile(
+    r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@"
+)
+
+# Leave headroom in each pack for the OpenRouter system prompt, JSON schema,
+# and model reply. Characters are only an approximation of tokens.
+PACK_CONTENT_BUDGET_RATIO = 0.6
 
 
-# Original combined/chunk types. Review jobs now use ReviewPack windows.
-# @dataclass
-# class DiffChunk:
-#     file_id: int
-#     filename: str
-#     chunk_index: int
-#     content: str
+@dataclass
+class ReviewPack:
+    pack_index: int
+    filenames: list[str]
+    content: str
 
 
+def pack_content_budget(max_chars: int, reserved: int = 0) -> int:
+    """Usable character budget after prompt/response headroom."""
+    return max(int(max_chars * PACK_CONTENT_BUDGET_RATIO) - reserved, 1)
 
 
 def filter_reviewable_files(pr_files: list[PRFile]) -> list[PRFile]:
@@ -102,20 +109,6 @@ def filter_reviewable_files(pr_files: list[PRFile]) -> list[PRFile]:
         for pr_file in pr_files
         if not is_ignored_review_path(pr_file.filename)
     ]
-
-
-
-
-HUNK_HEADER = re.compile(
-    r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@"
-)
-
-
-@dataclass
-class ReviewPack:
-    pack_index: int
-    filenames: list[str]
-    content: str
 
 
 def parse_new_file_hunk_ranges(patch: str | None) -> list[tuple[int, int]]:
@@ -177,6 +170,47 @@ def render_window(filename: str, lines: list[str], start: int, end: int) -> str:
     )
 
 
+def render_line_fragment(
+    filename: str,
+    line_no: int,
+    text: str,
+    *,
+    part: int,
+    parts: int,
+) -> str:
+    """Render one oversized source line, split across packs if needed."""
+    suffix = f" (line split {part}/{parts})" if parts > 1 else ""
+    return (
+        f"File: {filename}\n"
+        f"Lines: {line_no}-{line_no}{suffix}\n"
+        "Review this change with the surrounding source.\n\n"
+        f"{line_no:>6}|{text}\n"
+    )
+
+
+def split_oversized_line(
+    filename: str,
+    line_no: int,
+    text: str,
+    budget: int,
+) -> list[str]:
+    """Split one source line that does not fit the pack budget. Never drop it."""
+    overhead = len(render_line_fragment(filename, line_no, "", part=1, parts=1))
+    piece_budget = max(budget - overhead, 64)
+    if not text:
+        return [render_line_fragment(filename, line_no, "", part=1, parts=1)]
+
+    slices = [
+        text[index:index + piece_budget]
+        for index in range(0, len(text), piece_budget)
+    ]
+    parts = len(slices)
+    return [
+        render_line_fragment(filename, line_no, piece, part=index + 1, parts=parts)
+        for index, piece in enumerate(slices)
+    ]
+
+
 def build_file_windows(
     *,
     filename: str,
@@ -190,8 +224,7 @@ def build_file_windows(
     Every reviewable change in this file becomes one or more windows.
     Remainder goes to the next window/pack. Nothing from this file is dropped.
     """
-    intro_room = 256
-    budget = max(max_chars - intro_room, 512)
+    budget = pack_content_budget(max_chars)
 
     if status == "removed" or not source_text:
         if not patch:
@@ -228,7 +261,7 @@ def build_file_windows(
         cursor = start
         while cursor <= end:
             piece_end = cursor
-            last_fit = cursor
+            last_fit = cursor - 1
             while piece_end <= end:
                 candidate = render_window(filename, lines, cursor, piece_end)
                 if len(candidate) > budget:
@@ -236,7 +269,12 @@ def build_file_windows(
                 last_fit = piece_end
                 piece_end += 1
             if last_fit < cursor:
-                last_fit = cursor
+                line_text = lines[cursor - 1] if cursor <= len(lines) else ""
+                rendered.extend(
+                    split_oversized_line(filename, cursor, line_text, budget)
+                )
+                cursor += 1
+                continue
             rendered.append(render_window(filename, lines, cursor, last_fit))
             if last_fit >= end:
                 break
@@ -256,9 +294,10 @@ def pack_review_windows(
     """
     intro = (
         "Review the following pull request changes.\n"
+        "Each finding MUST include file_path for the file it refers to.\n"
         "Return the most important issues you can find.\n\n"
     )
-    budget = max(max_chars - len(intro), 1)
+    budget = pack_content_budget(max_chars, reserved=len(intro))
     packs: list[ReviewPack] = []
     current_parts: list[str] = []
     current_names: list[str] = []
@@ -335,87 +374,3 @@ def split_patch_by_hunks(patch: str, max_chars: int = 4000) -> list[str]:
         chunks.append("".join(current_chunk))
 
     return chunks
-
-
-# Original chunk path: split each file patch by hunk, one request per piece.
-# Replaced by build_file_windows + pack_review_windows so files are not skipped
-# and hunks keep GitHub source context.
-# def build_review_chunks(
-#     pr_files: list[PRFile],
-#     max_patch_chars: int = 4000,
-# ) -> list[DiffChunk]:
-#     chunks: list[DiffChunk] = []
-#
-#     for pr_file in filter_reviewable_files(pr_files=pr_files):
-#         if not pr_file.patch:
-#             continue
-#
-#         patch_chunks = split_patch_by_hunks(pr_file.patch, max_patch_chars)
-#
-#         for index, patch_chunk in enumerate(patch_chunks):
-#             content = (
-#                 f"File: {pr_file.filename}\n"
-#                 f"Status: {pr_file.status}\n"
-#                 f"Additions: {pr_file.additions}, Deletions: {pr_file.deletions}\n"
-#                 f"\n{patch_chunk}"
-#             )
-#             chunks.append(
-#                 DiffChunk(
-#                     file_id=pr_file.id,
-#                     filename=pr_file.filename,
-#                     chunk_index=index,
-#                     content=content,
-#                 )
-#             )
-#     return chunks
-#
-#
-# Original combined path: one request when the whole PR patch fits the limits.
-# Too large for openrouter/free, and files without a GitHub patch were skipped.
-# def build_combined_review_input(
-#     pr_files: list[PRFile],
-#     max_combined_chars: int = 24000,
-#     max_combined_files: int = 30,
-#     max_combined_changes: int = 1000,
-# ) -> str | None:
-#     """build one review payload for whole PR when PR is small to save API calls"""
-#     sections: list[str] = []
-#     total_chars = 0
-#     file_count = 0
-#     total_changes = 0
-#
-#     for pr_file in filter_reviewable_files(pr_files=pr_files):
-#         if not pr_file.patch:
-#             continue
-#
-#         file_changes = pr_file.changes or (pr_file.additions + pr_file.deletions)
-#
-#         section = (
-#             f"File: {pr_file.filename}\n"
-#             f"Status: {pr_file.status}\n"
-#             f"Additions: {pr_file.additions}, Deletions: {pr_file.deletions}\n\n"
-#             f"{pr_file.patch}\n"
-#         )
-#
-#         if total_chars + len(section) > max_combined_chars:
-#             return None
-#
-#         if file_count + 1 > max_combined_files:
-#             return None
-#
-#         if total_changes + file_changes > max_combined_changes:
-#             return None
-#
-#         sections.append(section)
-#         total_chars += len(section)
-#         file_count += 1
-#         total_changes += file_changes
-#
-#     if not sections:
-#         return None
-#
-#     return (
-#         "Review the following pull request diff.\n"
-#         "Return the most important issues you can find.\n\n"
-#         + "\n\n".join(sections)
-#     )

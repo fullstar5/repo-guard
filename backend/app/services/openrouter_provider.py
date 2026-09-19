@@ -114,7 +114,9 @@ class OpenRouterReviewProvider(ReviewProvider):
                             "- Do not wrap the JSON in markdown fences.\n"
                             "- Only include real issues worth showing to a developer.\n"
                             "- If there are no meaningful issues, return an empty findings array.\n"
-                            "- Use null for unknown file_path, start_line, end_line, or suggestion.\n"
+                            "- Each finding MUST include file_path matching a reviewed file.\n"
+                            "- Do not invent file_path. Use null only when the path is truly unknown.\n"
+                            "- Use null for unknown start_line, end_line, or suggestion.\n"
                             "- Keep findings concise and specific."
                         ),
                     },

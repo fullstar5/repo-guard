@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local env and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.secret
+
+# OS / editor
+.DS_Store

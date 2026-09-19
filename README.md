@@ -2,6 +2,48 @@
 
 CodeGuard AI 是一个面向开发者的 AI Code Review SaaS 项目。它的目标不是简单调用大模型生成点评，而是完整实践一个真实工程项目从 GitHub 集成、数据同步、AI review 到后续异步任务和云部署的全流程。
 
+## 系统运行流程
+
+两条入口汇合到同一条 worker pipeline：浏览器手动「Run AI review」，或 GitHub webhook 自动触发。
+
+```mermaid
+flowchart TB
+  Browser["Browser"] --> Vercel["Vercel Next.js"]
+  Vercel -->|"rewrite /api"| API["Northflank FastAPI"]
+  GitHub["GitHub"] -->|"OAuth callback"| API
+  GitHub -->|"webhook HMAC"| API
+
+  API --> Neon[("Neon Postgres")]
+  API --> Redis[("Upstash Redis")]
+  API -->|"delay task"| AMQP["CloudAMQP RabbitMQ"]
+
+  Cron["Northflank Cron / local Beat"] -->|"reclaim stale jobs"| AMQP
+  AMQP --> Worker["Celery worker"]
+
+  Worker --> Neon
+  Worker -->|"PR files / Contents / blob"| GitHub
+  Worker --> OpenRouter["OpenRouter"]
+
+  Browser -->|"poll job / findings"| Vercel
+```
+
+1. 用户在前端通过 GitHub 登录（httpOnly cookie session），后端保存用户和 token
+2. 前端 sync repositories / pull requests / changed files（patch 落库；全文不落库）
+3. 手动 `POST /pull-requests/{id}/review-jobs` 创建 job（`pending`，`total_chunks=0`）并入队，返回 `202`
+4. 或 GitHub `pull_request` `opened` / `synchronize` webhook 验签后入队，worker 先 sync files 再创建 job
+5. Worker 过滤噪声 → 按 `sha` / `contents_url` 拉 PR head 正文 → hunk ±40 行窗口打包 → 每个 pack 打一次 OpenRouter
+6. `summary` + `findings` 写入 Postgres；前端轮询 `pending → processing → completed / failed`
+7. 满 1 小时整单再跑一次；第二次超时或全部 pack 失败则 `failed`
+8. 本地 Beat / 生产 Cron 每 6 小时按 job 的 `updated_at` 回收卡死的 `processing`
+
+重试分三层，不要混在一起：
+
+| 层 | 行为 |
+|---|---|
+| 单次 OpenRouter 调用 | 空内容 / 5xx 最多再打 3 次**同一段 payload**；超时不上这一层重试 |
+| 单个 pack | 失败记进 `error_message`，继续后面的 pack；全部失败才 `failed`。模型窗口超限再拆 pack 是 11A-3，尚未做 |
+| 整段 job | Celery soft limit 1 小时后 `self.retry()` **一次**；第二次 `failed` |
+
 ## 项目目的
 
 这个项目用于系统学习和展示现代软件工程能力，包括：
@@ -30,7 +72,7 @@ CodeGuard AI 是一个面向开发者的 AI Code Review SaaS 项目。它的目�
 - Hosting: Vercel Hobby（前端）、Northflank Developer Sandbox（API + worker + cron）
 - CI/CD: GitHub Actions（PR 门禁；合入 `main` 后推 GHCR）。Northflank API / worker 从 `ghcr.io/<owner>/repo-guard-backend:main` 部署；前端走 Vercel Git Integration
 
-Architecture 最终完成的流程：Github -> Webhook -> BackendAPI -> RabbitMQ -> Celery -> OpenRouter -> Postgres -> Frontend
+Architecture 最终完成的流程：GitHub / 浏览器 → FastAPI → RabbitMQ → Celery → OpenRouter → Postgres → 前端轮询。
 
 ### 前端技术落地
 
@@ -44,22 +86,7 @@ README 原定前端栈与当前使用情况：
 
 ## 当前系统流程
 
-目前已经打通的主流程如下：
-
-1. 用户在前端通过 GitHub 登录（httpOnly cookie session）
-2. 后端保存用户信息和访问凭证
-3. 前端展示已同步 repositories，并支持手动 sync
-4. 前端展示某个 repository 下的 pull requests，并支持手动 sync
-5. 后端可同步某个 pull request 下的 changed files 和 patch
-6. `POST /pull-requests/{id}/review-jobs` 创建 job（`pending`）并入队，返回 `202 Accepted`
-7. Celery worker 后台执行 review（过滤噪声后按 GitHub 上下文窗口打包；每个 pack 一次模型请求）
-8. 调用 OpenRouter 生成结构化 `summary` + `findings` 并落库
-9. 前端 PR 详情触发 review，并以 TanStack Query 轮询 `pending -> processing -> completed / failed`
-10. 前端展示 `result_summary` 与 findings，可按文件 / 严重级别过滤，并跳到对应 diff 行号
-11. GitHub `pull_request` webhook（HMAC 验签）入队后，worker 自动 sync files、创建 review job 并走现有 AI pipeline
-12. 本地 Celery Beat / 生产 Northflank Cron 定期回收卡在 `processing` 的僵尸 job
-
-
+见文首「系统运行流程」。下面路线图按步骤记录实现历史。
 
 ## 项目路线图
 
@@ -113,7 +140,7 @@ README 原定前端栈与当前使用情况：
 - 支持小 PR 单请求 review
 - 支持大 PR fallback chunking
 
-状态：已完成（运行时路径已由 Step 11A 的窗口打包取代；旧 combined/chunk 代码保留为注释）
+状态：已完成（运行时路径已由 Step 11A 的窗口打包取代）
 
 ### Step 5: AI Review v1
 
@@ -435,7 +462,7 @@ FastAPI
 #### Phase 10D: Northflank Runtime
 
 - Service 1：FastAPI API（`nf-compute-10`，公开 HTTP 8000，`/health/live`）
-- Service 2：Celery worker，同一镜像，CMD override，`concurrency=1`，不公开端口
+- Service 2：Celery worker，同一镜像，CMD override，`concurrency=1 --without-gossip --without-mingle --without-heartbeat`，不公开端口
 - Broker：CloudAMQP Little Lemur（`amqps://`）。Northflank Sandbox 的 RabbitMQ Addon compute plan 全部灰色，无法在 0 成本下启用，因此不占用 Sandbox 的 1 个 Addon 名额
 - Cron Job：每 10 分钟运行 `mark_abandoned_jobs_as_failed`，替代占用第三个 Service 的常驻 Celery Beat
 - 运行时环境变量注入 Neon、Upstash、OpenRouter、GitHub 和 CloudAMQP；不启用付费扩容、额外 Service、持久卷或超出 Sandbox 的资源
@@ -483,13 +510,13 @@ FastAPI
 
 #### 11A: Review 输入打包（优先）
 
-针对 Step 6 chunking 和 Step 7B worker 执行。旧实现是 combined / hunk 两档悬崖（整 PR 一次请求，否则按 hunk 切片且无 patch 的文件直接 skip）。运行时已换成窗口打包；旧函数留在 `diff_chunking.py` 里作注释。
+针对 Step 6 chunking 和 Step 7B worker 执行。旧 combined / hunk 两档已从运行时移除（git 历史可查）。现在：过滤噪声 → GitHub 窗口 → 贪婪 pack。
 
 硬约束（高于「任务必须 complete」、高于「少打几次 API」）：
 
 - 过滤名单之外、PR 里该审的文件 **一个都不能 skip**。装不进当前 pack 的部分进入 **下一个 pack**，禁止丢掉文件后半段。
 - 产出必须有用：切分时要有变更前后的源码上下文。库里只有 GitHub `patch`（hunk 自带约 3 行），不够就用 Contents API / blob `sha` 拉该文件，再取 hunk 附近行。全文只在这次 review 进内存，不写库。
-- 生产是 `openrouter/free`，窗口未知；用偏小的字符预算（默认 8000），超限再拆，但拆完仍须覆盖该文件全部变更。
+- 生产是 `openrouter/free`，窗口未知；pack 字符预算按 `REVIEW_PACK_MAX_CHARS × 0.6` 预留 prompt/回复空间，不是按某个模型的 token 上限。
 - 任务墙钟超时 1 小时（Celery soft limit）。到点重试 **一次**；第二次再超时或失败则标 `failed`。不是靠 skip 文件来换 `completed`。
 
 已落地：
@@ -506,12 +533,13 @@ FastAPI
 
 4. **模型失败与 1 小时超时**（11A-4）  
    某次 pack 调用失败记进 `error_message`，其余 pack 继续跑；全部失败才 `failed`。  
-   Celery `soft_time_limit=3600`，`time_limit=3660`。第一次超时 `self.retry()` 再跑整段任务（所有 pack 从头来），第二次写 `failed`。单次 HTTP 超时不再连打 3 次，以免抢在 Celery 前面把 job 标失败。  
-   `OPENROUTER_READ_TIMEOUT` / `wait_for` 为 7200 秒，大于 1 小时 soft limit，墙钟掐断只认 Celery。  
-   过期 `processing` 回收每 **6 小时** 跑一轮，按 **每个 job 自己的 `updated_at`** 判断；阈值 **10800 秒（3 小时）**，大于「1 小时 + 那一次重试」。
+   Celery `soft_time_limit=3600`，`time_limit=4200`（给写库和 `self.retry()` 留时间）。第一次超时整单再跑，第二次写 `failed`。  
+   单次 OpenRouter **超时不重试**；空内容 / 5xx 才对**同一 payload** 最多再打 3 次。  
+   `OPENROUTER_READ_TIMEOUT` / `wait_for` 为 7200 秒，大于 soft limit，墙钟掐断只认 Celery。  
+   过期 `processing` 回收每 **6 小时** 跑一轮，按 **每个 job 自己的 `updated_at`**；阈值 **10800 秒（3 小时）**。
 
 5. **单测**（11A-5 一部分）  
-   噪声过滤、每个业务文件都进某个 pack、大文件余量进后续 pack、窗口带上下文、无 patch 文件仍覆盖。
+   噪声过滤、每个业务文件都进某个 pack、大文件余量进后续 pack、窗口带上下文、无 patch 文件仍覆盖、超长单行切开、GitHub raw/403→blob/base64 JSON。
 
 清单：
 
@@ -520,6 +548,21 @@ FastAPI
 - [ ] **11A-3 单次请求超限再拆** — 拆的是这一次 pack 请求（多文件 pack 拆两半，单窗口再缩小上下文半径），不是把文件从队列里拿掉。
 - [x] **11A-4 模型失败与 1 小时超时**
 - [x] **11A-5 打包单测** — 无 skip / 窗口上下文 / 无 patch。大 PR 集成路径（部分成功、全部失败、模型超限再拆）仍待补，见下方测试计划。
+
+合入 / 上生产前 checklist（环境变量在 **Northflank api + worker**，不是 Neon）：
+
+- Worker CMD：`celery -A app.core.celery_app:celery_app worker -l INFO --concurrency=1 --without-gossip --without-mingle --without-heartbeat`（关掉后才不会空转打满 CloudAMQP 月额度）
+- `OPENROUTER_READ_TIMEOUT=7200`
+- `CELERY_TASK_SOFT_TIME_LIMIT=3600`
+- `CELERY_TASK_TIME_LIMIT=4200`
+- `CELERY_TASK_RECLAIM_INTERVAL_SECONDS=21600`
+- `REVIEW_JOB_STALE_PROCESSING_SECONDS=10800`
+- `REVIEW_PACK_MAX_CHARS=8000`
+- `REVIEW_CONTEXT_LINES=40`
+- `REVIEW_RETRY_ATTEMPTS=3`（只作用于单次调用的空内容/5xx，不是整单 3 次）
+- 去掉 `REVIEW_PACK_MAX_CALLS` 以及旧的 `REVIEW_MAX_COMBINED_*` / `REVIEW_MAX_PATCH_CHARS`
+- Cron / Beat 间隔与 `CELERY_TASK_RECLAIM_INTERVAL_SECONDS` 一致（`0 */6 * * *`）
+- 这次没有新的 Alembic，不必改 Neon
 
 #### 安全与鉴权
 
@@ -584,7 +627,7 @@ FastAPI
 - Pull Request 同步
 - Pull Request files / patch 同步
 - Review job 数据模型
-- Diff chunking（运行时已改为 GitHub 上下文窗口打包；旧 combined/chunk 保留为注释）
+- Diff chunking（运行时已改为 GitHub 上下文窗口打包）
 - OpenRouter 在线模型调用
 - 过滤噪声后按 pack 请求；无 patch 的业务文件仍拉 GitHub 正文覆盖
 - Review findings 数据表
@@ -653,7 +696,7 @@ GitHub webhook 自动 review、9C 两层幂等，以及 10A–10E 的 0 成本�
 
 ## 项目状态
 
-当前项目已完成 GitHub 集成、结构化 AI review、异步任务、前端展示、webhook 驱动的自动 review、delivery/active job 两层幂等，以及 Vercel + Northflank + CloudAMQP 的 0 成本部署。9D GitHub 评论回写暂缓。10E：PR 门禁通过后合入 `main` 会推 GHCR；API / worker 跟 `:main` 自动更新。改表则本地先对生产 Neon 迁移再合入。10F 跳过。11A：噪声过滤、GitHub 窗口打包、1 小时整单重试已落地；下一步是 11A-3。生产 worker 需同步超时 / `REVIEW_CONTEXT_LINES` 环境变量，并去掉 `REVIEW_PACK_MAX_CALLS`。Neon 不用改环境变量，这次也没有新迁移。
+当前项目已完成 GitHub 集成、结构化 AI review、异步任务、前端展示、webhook 驱动的自动 review、delivery/active job 两层幂等，以及 Vercel + Northflank + CloudAMQP 的 0 成本部署。9D GitHub 评论回写暂缓。10E：合入 `main` 推 GHCR，API / worker 跟 `:main`。改表则本地先对生产 Neon 迁移再合入。10F 跳过。11A 打包与 1 小时整单重试已落地；下一步 11A-3。上线 worker 必须改超时 / packing 环境变量，并加上 `--without-gossip --without-mingle --without-heartbeat`。
 
 ## 当前阶段测试计划
 
@@ -661,7 +704,7 @@ Step 7E 的 task 层失败路径和 Step 9C 的核心幂等路径已经用自动
 
 已完成验证：
 
-- 小 PR 可走单次 review 请求
+- 小 PR 可走打包 review（能装进一个 pack 时 `total_chunks` 在执行后为 1；创建时为 0）
 - `summary` 与 `findings` 可成功解析
 - `summary` 与 `findings` 可成功写入数据库
 - `review_jobs` 接口能够返回结构化结果
@@ -682,7 +725,7 @@ Step 7E 的 task 层失败路径和 Step 9C 的核心幂等路径已经用自动
 - 相同 `delivery_id` 重放返回 2xx 且不重复 dispatch；broker 发布失败会删除 delivery 记录以允许 GitHub 重试
 - 同一 PR 已有 `pending` / `processing` job 时，手动与 webhook 入口复用已有 job，不重复创建或入队
 - 噪声文件不进入 pack；无 patch 的业务文件仍生成窗口；大文件余量进入后续 pack
-- 当前后端自动化测试共 32 个
+- 当前后端自动化测试共 37 个
 
 仍建议补完的测试（Step 11A-3 / 集成路径，不阻塞已落地的打包）：
 
@@ -765,7 +808,7 @@ docker compose up -d rabbitmq
 start celery worker: 
 
 ```
-celery -A app.core.celery_app:celery_app worker -l INFO
+celery -A app.core.celery_app:celery_app worker -l INFO --concurrency=1 --without-gossip --without-mingle --without-heartbeat
 ```
 
 start celery beat: 

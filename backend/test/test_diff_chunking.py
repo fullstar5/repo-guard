@@ -29,36 +29,6 @@ def test_filter_reviewable_files_drops_noise_only():
     ]
 
 
-# Original tests for build_combined_review_input / build_review_chunks.
-# def _file(filename: str, patch: str = "@@ -1 +1 @@\n+ok\n") -> SimpleNamespace:
-#     return SimpleNamespace(
-#         id=1,
-#         filename=filename,
-#         status="modified",
-#         additions=1,
-#         deletions=0,
-#         changes=1,
-#         patch=patch,
-#     )
-#
-#
-# def test_combined_and_chunk_builders_skip_ignored_paths():
-#     files = [
-#         _file("package-lock.json", patch="+" + ("x" * 50_000)),
-#         _file("app/__pycache__/mod.pyc", patch="+" + ("y" * 50_000)),
-#         _file("app/hello.py", patch="@@ -1 +1 @@\n+print(1)\n"),
-#     ]
-#
-#     combined = build_combined_review_input(files)
-#     chunks = build_review_chunks(files)
-#
-#     assert combined is not None
-#     assert "package-lock.json" not in combined
-#     assert "__pycache__" not in combined
-#     assert "app/hello.py" in combined
-#     assert [chunk.filename for chunk in chunks] == ["app/hello.py"]
-
-
 def test_every_reviewable_file_is_in_some_pack():
     windows = [
         ("a.py", "A" * 100),
@@ -125,3 +95,19 @@ def test_missing_patch_still_covers_the_file():
     assert "no_patch.py" in windows[0]
     assert "body1" in windows[0]
     assert "body5" in windows[0]
+
+
+def test_oversized_single_line_is_split_not_dropped():
+    long_line = "x" * 4000
+    windows = build_file_windows(
+        filename="wide.py",
+        status="modified",
+        patch="@@ -1,1 +1,1 @@\n-old\n+new\n",
+        source_text=long_line,
+        context_lines=0,
+        max_chars=800,
+    )
+    blob = "".join(windows)
+    assert blob.count("x") >= 4000
+    assert len(windows) > 1
+    assert all("wide.py" in window for window in windows)

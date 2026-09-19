@@ -1,3 +1,6 @@
+import base64
+import json
+
 import httpx  # pyright: ignore[reportMissingImports]
 from sqlalchemy import select  # pyright: ignore[reportMissingImports]
 from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
@@ -137,6 +140,31 @@ async def get_PR_file_for_user(
     return result.scalar_one_or_none()
 
 
+def _text_from_github_file_response(response: httpx.Response) -> str:
+    """Decode Contents/blob bodies. Raw text, or JSON with base64 content."""
+    content_type = (response.headers.get("content-type") or "").lower()
+    raw = response.content or b""
+    if not raw:
+        return ""
+
+    looks_json = "json" in content_type or raw.lstrip()[:1] in {b"{", b"["}
+    if looks_json:
+        try:
+            payload = response.json()
+        except (ValueError, json.JSONDecodeError):
+            return raw.decode("utf-8", errors="replace")
+        if isinstance(payload, dict):
+            content = payload.get("content")
+            if isinstance(content, str) and payload.get("encoding") == "base64":
+                decoded = base64.b64decode(content)
+                return decoded.decode("utf-8", errors="replace")
+            if isinstance(content, str):
+                return content
+        return json.dumps(payload)
+
+    return raw.decode("utf-8", errors="replace")
+
+
 async def fetch_github_file_text(
     http_client: httpx.AsyncClient,
     access_token: str,
@@ -156,7 +184,7 @@ async def fetch_github_file_text(
     if contents_url:
         response = await http_client.get(contents_url, headers=headers)
         if response.status_code == 200:
-            return response.text
+            return _text_from_github_file_response(response)
         if response.status_code not in {403, 404}:
             response.raise_for_status()
 
@@ -168,6 +196,6 @@ async def fetch_github_file_text(
         if response.status_code == 404:
             return None
         response.raise_for_status()
-        return response.text
+        return _text_from_github_file_response(response)
 
     return None

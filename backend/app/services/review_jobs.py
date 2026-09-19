@@ -219,16 +219,15 @@ async def create_review_job(
     provider: str,
     model_name: str,
 ) -> ReviewJob:
-    """Create a review job after counting files and chunks."""
+    """Create a review job after counting files."""
     pr_files = await get_pull_request_files(db, pull_request.id)
-    reviewable = filter_reviewable_files(pr_files)
     review_job = ReviewJob(
         pull_request_id=pull_request.id,
         status=ReviewJobStatus.pending,
         provider=provider,
         model_name=model_name,
         total_files=len(pr_files),
-        total_chunks=max(len(reviewable), 1),
+        total_chunks=0,
     )
     db.add(review_job)
 
