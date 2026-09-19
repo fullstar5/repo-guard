@@ -1,32 +1,41 @@
 "use client";
 
 import Link from "next/link";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { isAxiosError } from "axios";
+import { BookMarked } from "lucide-react";
 
-import { AppHeader } from "@/components/app-header";
-import { Button } from "@/components/ui/button";
+import { AuthGate } from "@/components/auth-gate";
+import { EmptyState } from "@/components/empty-state";
+import { FilterEmpty, QueryError, TableSkeleton } from "@/components/feedback";
 import {
+  FilterBar,
+  FilterSelect,
+  PageToolbar,
+  SearchInput,
+} from "@/components/page-chrome";
+import {
+  LeanTable,
+  LeanTableCell,
+  LeanTableHead,
+  LeanTableHeader,
+  LeanTableRow,
   Table,
   TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
-  getCurrentUser,
-  getGitHubLoginUrl,
-  listRepositories,
-  syncRepositories,
-} from "@/lib/api";
+} from "@/components/lean-table";
+import { VisibilityBadge } from "@/components/status-badges";
+import { SyncButton } from "@/components/sync-button";
+import { useToast } from "@/components/toast";
+import { authMeQueryOptions } from "@/lib/auth-session";
+import { formatRelativeTime } from "@/lib/format";
+import { listRepositories, syncRepositories } from "@/lib/api";
 
 export default function HomePage() {
   const queryClient = useQueryClient();
-  const meQuery = useQuery({
-    queryKey: ["auth", "me"],
-    queryFn: getCurrentUser,
-  });
+  const toast = useToast();
+  const meQuery = useQuery(authMeQueryOptions);
+  const [search, setSearch] = useState("");
+  const [visibility, setVisibility] = useState("all");
 
   const reposQuery = useQuery({
     queryKey: ["repositories"],
@@ -38,92 +47,125 @@ export default function HomePage() {
     mutationFn: syncRepositories,
     onSuccess: (items) => {
       queryClient.setQueryData(["repositories"], items);
+      toast({ tone: "success", message: "Repositories updated." });
+    },
+    onError: () => {
+      toast({ tone: "danger", message: "Couldn't sync repositories." });
     },
   });
 
-  const unauthorized =
-    meQuery.isError &&
-    isAxiosError(meQuery.error) &&
-    meQuery.error.response?.status === 401;
+  const filtered = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return (reposQuery.data ?? []).filter((repo) => {
+      if (visibility === "private" && !repo.private) {
+        return false;
+      }
+      if (visibility === "public" && repo.private) {
+        return false;
+      }
+      if (!query) {
+        return true;
+      }
+      return repo.full_name.toLowerCase().includes(query);
+    });
+  }, [reposQuery.data, search, visibility]);
 
-  if (meQuery.isLoading) {
-    return (
-      <main className="flex min-h-screen items-center justify-center">
-        <p className="text-sm text-zinc-500">Loading session...</p>
-      </main>
-    );
-  }
-
-  if (unauthorized || meQuery.isError || !meQuery.data) {
-    return (
-      <main className="flex min-h-screen items-center justify-center">
-        <div className="flex w-full max-w-md flex-col gap-4 rounded-xl border p-8">
-          <h1 className="text-2xl font-semibold">CodeGuard AI</h1>
-          <p className="text-sm text-zinc-600">
-            Sign in with GitHub to review pull requests.
-          </p>
-          <Button asChild>
-            <a href={getGitHubLoginUrl()}>Continue with GitHub</a>
-          </Button>
-        </div>
-      </main>
-    );
-  }
+  const total = reposQuery.data?.length ?? 0;
+  const toolbarMeta =
+    total === 0
+      ? undefined
+      : filtered.length === total
+        ? `${total} ${total === 1 ? "repository" : "repositories"}`
+        : `${filtered.length} of ${total} repositories`;
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-6 p-8">
-      <AppHeader user={meQuery.data} />
+    <AuthGate>
+      <PageToolbar
+        title="Repositories"
+        meta={toolbarMeta}
+        action={
+          <SyncButton
+            pending={syncMutation.isPending}
+            onClick={() => syncMutation.mutate()}
+            aria-label={syncMutation.isPending ? "Syncing repositories" : "Sync repositories"}
+          />
+        }
+      />
 
-      <section className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-medium">Repositories</h2>
-          <p className="text-sm text-zinc-500">
-            Synced from GitHub. Refresh the page will not call GitHub again.
-          </p>
-        </div>
-        <Button
-          onClick={() => syncMutation.mutate()}
-          disabled={syncMutation.isPending}
-        >
-          {syncMutation.isPending ? "Syncing..." : "Sync repositories"}
-        </Button>
-      </section>
+      <FilterBar>
+        <SearchInput
+          value={search}
+          onChange={setSearch}
+          placeholder="Search repositories..."
+        />
+        <FilterSelect
+          value={visibility}
+          onChange={setVisibility}
+          aria-label="Filter by visibility"
+          options={[
+            { value: "all", label: "All visibility" },
+            { value: "public", label: "Public" },
+            { value: "private", label: "Private" },
+          ]}
+        />
+      </FilterBar>
 
       {reposQuery.isLoading ? (
-        <p className="text-sm text-zinc-500">Loading repositories...</p>
+        <TableSkeleton />
       ) : reposQuery.isError ? (
-        <p className="text-sm text-red-600">Failed to load repositories.</p>
-      ) : reposQuery.data?.length === 0 ? (
-        <p className="text-sm text-zinc-500">
-          No repositories yet. Click Sync repositories.
-        </p>
+        <QueryError
+          message="Failed to load repositories."
+          onRetry={() => void reposQuery.refetch()}
+        />
+      ) : total === 0 ? (
+        <EmptyState
+          icon={<BookMarked className="size-7 text-[#22d3ee]" aria-hidden="true" />}
+          title="No repositories yet"
+          hint="Sync from GitHub to load repositories for this workspace."
+          actionLabel="Sync"
+          onAction={() => syncMutation.mutate()}
+          actionPending={syncMutation.isPending}
+        />
+      ) : filtered.length === 0 ? (
+        <FilterEmpty
+          title="No matching repositories"
+          hint="Try a different search or visibility filter."
+        />
       ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Repository</TableHead>
-              <TableHead>Visibility</TableHead>
-              <TableHead>Default branch</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {reposQuery.data?.map((repo) => (
-              <TableRow key={repo.id}>
-                <TableCell>
-                  <Link
-                    href={`/repositories/${repo.id}`}
-                    className="font-medium hover:underline"
-                  >
-                    {repo.full_name}
-                  </Link>
-                </TableCell>
-                <TableCell>{repo.private ? "Private" : "Public"}</TableCell>
-                <TableCell>{repo.default_branch ?? "-"}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+        <LeanTable>
+          <Table>
+            <LeanTableHeader>
+              <LeanTableRow>
+                <LeanTableHead>Repository</LeanTableHead>
+                <LeanTableHead>Visibility</LeanTableHead>
+                <LeanTableHead className="text-right">Updated</LeanTableHead>
+              </LeanTableRow>
+            </LeanTableHeader>
+            <TableBody>
+              {filtered.map((repo) => (
+                <LeanTableRow key={repo.id}>
+                  <LeanTableCell className="max-w-[36rem]">
+                    <Link
+                      href={`/repositories/${repo.id}`}
+                      title={repo.full_name}
+                      className="flex min-w-0 items-center gap-3 font-medium text-[#fafafa] hover:text-[#67e8f9] focus-visible:text-[#67e8f9] focus-visible:ring-2 focus-visible:ring-[#22d3ee]/70 focus-visible:outline-none"
+                    >
+                      <BookMarked className="size-4 shrink-0 text-[#a1a1aa]" aria-hidden="true" />
+                      <span className="truncate">{repo.full_name}</span>
+                    </Link>
+                  </LeanTableCell>
+                  <LeanTableCell>
+                    <VisibilityBadge isPrivate={repo.private} />
+                  </LeanTableCell>
+                  <LeanTableCell className="text-right text-[#a1a1aa]">
+                    {formatRelativeTime(repo.updated_at)}
+                  </LeanTableCell>
+                </LeanTableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </LeanTable>
       )}
-    </main>
+    </AuthGate>
   );
 }
