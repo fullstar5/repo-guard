@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 import httpx  # pyright: ignore[reportMissingImports]
+from billiard.exceptions import SoftTimeLimitExceeded  # pyright: ignore[reportMissingImports]
 
 from sqlalchemy import delete, select  # pyright: ignore[reportMissingImports]
 from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
@@ -14,7 +15,12 @@ from app.models.pr_file import PRFile
 from app.models.pull_request import PullRequest
 from app.models.repository import Repository
 from app.models.review_job import ReviewJob, ReviewJobStatus
-from app.services.diff_chunking import build_review_chunks, build_combined_review_input
+from app.services.diff_chunking import (
+    build_file_windows,
+    filter_reviewable_files,
+    pack_review_windows,
+)
+from app.services.github_pr_files import fetch_github_file_text
 from app.services.openrouter_provider import OpenRouterReviewProvider
 from app.models.review_finding import ReviewFinding, ReviewFindingSeverity
 from app.services.review_provider import ReviewFindingDraft, ReviewResult
@@ -145,23 +151,20 @@ async def _review_content_with_retries(
     request_label: str,
     attempt_count: int = 3,
 ) -> ReviewResult:
-    """Review content with 3 retries"""
+    """Retry one OpenRouter call. Timeouts are not retried here."""
     last_exc: Exception | None = None
 
     for attempt in range(1, attempt_count + 1):
         try:
-            # httpx read timeout only applies per socket read. A slow model can
-            # keep the connection alive for many minutes. Cap each attempt.
             return await asyncio.wait_for(
                 provider.review_content(content),
                 timeout=settings.openrouter_read_timeout,
             )
+        except SoftTimeLimitExceeded:
+            raise
+        except (TimeoutError, httpx.TimeoutException):
+            raise
         except Exception as exc:
-            if isinstance(exc, TimeoutError) and not str(exc).strip():
-                exc = TimeoutError(
-                    "Review attempt timed out after "
-                    f"{settings.openrouter_read_timeout:.0f}s waiting for the model."
-                )
             last_exc = exc
             logger.warning(
                 "Review attempt %s/%s failed for %s: %s",
@@ -216,30 +219,15 @@ async def create_review_job(
     provider: str,
     model_name: str,
 ) -> ReviewJob:
-    """Create a review job after counting files and chunks."""
+    """Create a review job after counting files."""
     pr_files = await get_pull_request_files(db, pull_request.id)
-
-    combined_input = build_combined_review_input(
-        pr_files,
-        max_combined_chars=settings.review_max_combined_chars,
-        max_combined_files=settings.review_max_combined_files,
-        max_combined_changes=settings.review_max_combined_changes,
-    )
-
-    if combined_input is not None:
-        total_chunks = 1
-    else:
-        total_chunks = len(
-            build_review_chunks(pr_files, max_patch_chars=settings.review_max_patch_chars)
-        )
-
     review_job = ReviewJob(
         pull_request_id=pull_request.id,
         status=ReviewJobStatus.pending,
         provider=provider,
         model_name=model_name,
         total_files=len(pr_files),
-        total_chunks=total_chunks,
+        total_chunks=0,
     )
     db.add(review_job)
 
@@ -328,82 +316,106 @@ async def execute_review_job(
             model_name=review_job.model_name,
         )
 
-        combined_input = build_combined_review_input(
-            pr_files,
-            max_combined_chars=settings.review_max_combined_chars,
-            max_combined_files=settings.review_max_combined_files,
-            max_combined_changes=settings.review_max_combined_changes,
+        pull_request = await db.get(PullRequest, review_job.pull_request_id)
+        if pull_request is None:
+            raise ValueError(f"Pull request {review_job.pull_request_id} was not found")
+        repo_result = await db.execute(
+            select(Repository)
+            .options(selectinload(Repository.user))
+            .where(Repository.id == pull_request.repository_id)
+        )
+        repository = repo_result.scalar_one()
+        access_token = (
+            repository.user.github_access_token if repository.user is not None else None
         )
 
-        if combined_input is not None:
-            logger.info("Review job %s using combined-input path", review_job.id)
-            # Fast path: review the whole PR in one request.
-            review_result = await _review_content_with_retries(
-                provider,
-                combined_input,
-                request_label="combined review",
-                attempt_count=settings.review_retry_attempts,
-            )
-            logger.info("Review job %s finished provider call for combined path", review_job.id)
-            review_job.result_summary = review_result.summary
-            review_job.total_chunks = 1
-            review_job.error_message = None
-
-            logger.info("Review job %s replacing findings for combined path", review_job.id)
-            await replace_review_findings(
-                db=db,
-                review_job=review_job,
-                pr_files=pr_files,
-                findings=review_result.findings,
-            )
-        else:
-            logger.info("Review job %s using chunked path", review_job.id)
-            # Fallback path: split oversized PRs into smaller reviewable units.
-            chunks = build_review_chunks(
-                pr_files,
-                max_patch_chars=settings.review_max_patch_chars,
-            )
-            if not chunks:
-                raise ValueError("No reviewable patch content found for this pull request.")
-            summary_sections: list[str] = []
-            all_findings: list[ReviewFindingDraft] = []
-            chunk_errors: list[str] = []
-
-            for chunk in chunks:
-                chunk_label = f"{chunk.filename} [chunk {chunk.chunk_index + 1}]"
-
+        windows: list[tuple[str, str]] = []
+        fetch_notes: list[str] = []
+        for pr_file in filter_reviewable_files(pr_files):
+            source_text = None
+            if pr_file.status != "removed" and access_token:
                 try:
-                    result = await _review_content_with_retries(
-                        provider,
-                        chunk.content,
-                        request_label=chunk_label,
-                        attempt_count=settings.review_retry_attempts,
+                    source_text = await fetch_github_file_text(
+                        http_client,
+                        access_token,
+                        pr_file.contents_url,
+                        owner_login=repository.owner_login,
+                        repo_name=repository.name,
+                        blob_sha=pr_file.sha,
                     )
+                except SoftTimeLimitExceeded:
+                    raise
                 except Exception as exc:
-                    chunk_errors.append(
-                        f"{chunk_label}: failed after {settings.review_retry_attempts} attempts: {exc}"
+                    fetch_notes.append(
+                        f"{pr_file.filename}: failed to fetch source ({exc})"
                     )
-                    continue
-
-                summary_sections.append(f"## {chunk_label}\n{result.summary}")
-                all_findings.extend(
-                    _apply_file_path_fallback(result.findings, chunk.filename)
-                )
-            
-            if not summary_sections:
-                raise ValueError("All review chunks failed. " + " | ".join(chunk_errors))
-
-            review_job.result_summary = "\n\n".join(summary_sections)
-            review_job.total_chunks = len(chunks)
-            review_job.error_message = "\n".join(chunk_errors) if chunk_errors else None
-
-            logger.info("Review job %s replacing findings for chunked path", review_job.id)
-            await replace_review_findings(
-                db=db,
-                review_job=review_job,
-                pr_files=pr_files,
-                findings=all_findings,
+            file_windows = build_file_windows(
+                filename=pr_file.filename,
+                status=pr_file.status,
+                patch=pr_file.patch,
+                source_text=source_text,
+                context_lines=settings.review_context_lines,
+                max_chars=settings.review_pack_max_chars,
             )
+            windows.extend((pr_file.filename, window) for window in file_windows)
+
+        if not windows:
+            raise ValueError("No reviewable patch content found for this pull request.")
+
+        packs = pack_review_windows(
+            windows,
+            max_chars=settings.review_pack_max_chars,
+        )
+        logger.info(
+            "Review job %s packed %s window(s) into %s request(s)",
+            review_job.id,
+            len(windows),
+            len(packs),
+        )
+
+        summary_sections: list[str] = []
+        all_findings: list[ReviewFindingDraft] = []
+        pack_notes = list(fetch_notes)
+
+        for pack in packs:
+            pack_label = (
+                f"pack {pack.pack_index + 1} [" + ", ".join(pack.filenames) + "]"
+            )
+            try:
+                result = await _review_content_with_retries(
+                    provider,
+                    pack.content,
+                    request_label=pack_label,
+                    attempt_count=settings.review_retry_attempts,
+                )
+            except SoftTimeLimitExceeded:
+                raise
+            except Exception as exc:
+                pack_notes.append(
+                    f"{pack_label}: {_format_review_job_error(exc)}"
+                )
+                continue
+
+            summary_sections.append(f"## {pack_label}\n{result.summary}")
+            findings = result.findings
+            if len(pack.filenames) == 1:
+                findings = _apply_file_path_fallback(findings, pack.filenames[0])
+            all_findings.extend(findings)
+
+        if not summary_sections:
+            raise ValueError("All review packs failed. " + " | ".join(pack_notes))
+
+        review_job.result_summary = "\n\n".join(summary_sections)
+        review_job.total_chunks = len(packs)
+        review_job.error_message = "\n".join(pack_notes) if pack_notes else None
+
+        logger.info("Review job %s replacing findings for packed path", review_job.id)
+        await replace_review_findings(
+            db=db,
+            review_job=review_job,
+            pr_files=pr_files,
+            findings=all_findings,
+        )
         
         review_job.status = ReviewJobStatus.completed
         logger.info("Review job %s committing completed state", review_job.id)
@@ -413,6 +425,8 @@ async def execute_review_job(
         logger.info("Review job %s completed successfully", review_job.id)
         return review_job
 
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         await db.rollback()
 

@@ -3,11 +3,12 @@ from unittest.mock import AsyncMock, patch
 import httpx  # pyright: ignore[reportMissingImports]
 import pytest  # pyright: ignore[reportMissingImports]
 from billiard.exceptions import SoftTimeLimitExceeded  # pyright: ignore[reportMissingImports]
+from celery.exceptions import Retry  # pyright: ignore[reportMissingImports]
 
 from app.tasks.review_jobs import execute_review_job_task, mark_abandoned_jobs
 from app.services.review_jobs import _format_review_job_error
 
-def test_soft_timeout_persists_failed_status():
+def test_soft_timeout_retries_whole_job_once():
     with (
         patch(
             "app.tasks.review_jobs.execute_review_job_by_id",
@@ -17,14 +18,43 @@ def test_soft_timeout_persists_failed_status():
             "app.tasks.review_jobs.mark_review_job_failed_by_id",
             new=AsyncMock(return_value=None),
         ) as mark_failed,
+        patch.object(
+            execute_review_job_task,
+            "retry",
+            side_effect=Retry(),
+        ) as retry,
     ):
-        with pytest.raises(SoftTimeLimitExceeded):
+        with pytest.raises(Retry):
             execute_review_job_task.run(review_job_id=123)
 
-        mark_failed.assert_awaited_once()
-        job_id, message = mark_failed.await_args.args
-        assert job_id == 123
-        assert "soft time limit" in message.lower()
+        mark_failed.assert_not_awaited()
+        retry.assert_called_once()
+
+
+def test_soft_timeout_second_attempt_marks_failed():
+    request = execute_review_job_task.request
+    previous_retries = request.retries
+    request.retries = 1
+    try:
+        with (
+            patch(
+                "app.tasks.review_jobs.execute_review_job_by_id",
+                new=AsyncMock(side_effect=SoftTimeLimitExceeded()),
+            ),
+            patch(
+                "app.tasks.review_jobs.mark_review_job_failed_by_id",
+                new=AsyncMock(return_value=None),
+            ) as mark_failed,
+        ):
+            with pytest.raises(SoftTimeLimitExceeded):
+                execute_review_job_task.run(review_job_id=123)
+
+            mark_failed.assert_awaited_once()
+            job_id, message = mark_failed.await_args.args
+            assert job_id == 123
+            assert "soft time limit" in message.lower()
+    finally:
+        request.retries = previous_retries
 
 
 def test_transient_error_exhausted_persists_failed_status():

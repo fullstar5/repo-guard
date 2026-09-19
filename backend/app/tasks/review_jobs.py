@@ -67,17 +67,31 @@ def execute_review_job_task(self, review_job_id: int) -> dict[str, object]:
             "status": review_job.status.value,
         }
 
-    except SoftTimeLimitExceeded:
+    except SoftTimeLimitExceeded as exc:
         message = (
             f"Review job exceeded soft time limit "
             f"({settings.celery_task_soft_time_limit}s)."
         )
+
+        # First 1h timeout: rerun the whole job. Do not mark failed,
+        # or execute_review_job_by_id will skip the retry.
+        if self.request.retries < 1:
+            logger.warning(
+                "Retry whole review job %s after soft time limit "
+                "(task_id=%s, retry=%s)",
+                review_job_id,
+                self.request.id,
+                self.request.retries,
+            )
+            raise self.retry(exc=exc, countdown=_retry_countdown(1))
+
         try:
             asyncio.run(mark_review_job_failed_by_id(review_job_id, message))
         except Exception:
             logger.exception("Failed to persist soft-timeout failure for review_job_id=%s", review_job_id)
         logger.error(
-            "review job %s exceeded soft time limit (task_id=%s, retry=%s)",
+            "review job %s exceeded soft time limit after whole-job retry "
+            "(task_id=%s, retry=%s)",
             review_job_id,
             self.request.id,
             self.request.retries,

@@ -2,6 +2,48 @@
 
 CodeGuard AI 是一个面向开发者的 AI Code Review SaaS 项目。它的目标不是简单调用大模型生成点评，而是完整实践一个真实工程项目从 GitHub 集成、数据同步、AI review 到后续异步任务和云部署的全流程。
 
+## 系统运行流程
+
+两条入口汇合到同一条 worker pipeline：浏览器手动「Run AI review」，或 GitHub webhook 自动触发。
+
+```mermaid
+flowchart TB
+  Browser["Browser"] --> Vercel["Vercel Next.js"]
+  Vercel -->|"rewrite /api"| API["Northflank FastAPI"]
+  GitHub["GitHub"] -->|"OAuth callback"| API
+  GitHub -->|"webhook HMAC"| API
+
+  API --> Neon[("Neon Postgres")]
+  API --> Redis[("Upstash Redis")]
+  API -->|"delay task"| AMQP["CloudAMQP RabbitMQ"]
+
+  Cron["Northflank Cron / local Beat"] -->|"reclaim stale jobs"| AMQP
+  AMQP --> Worker["Celery worker"]
+
+  Worker --> Neon
+  Worker -->|"PR files / Contents / blob"| GitHub
+  Worker --> OpenRouter["OpenRouter"]
+
+  Browser -->|"poll job / findings"| Vercel
+```
+
+1. 用户在前端通过 GitHub 登录（httpOnly cookie session），后端保存用户和 token
+2. 前端 sync repositories / pull requests / changed files（patch 落库；全文不落库）
+3. 手动 `POST /pull-requests/{id}/review-jobs` 创建 job（`pending`，`total_chunks=0`）并入队，返回 `202`
+4. 或 GitHub `pull_request` `opened` / `synchronize` webhook 验签后入队，worker 先 sync files 再创建 job
+5. Worker 过滤噪声 → 按 `sha` / `contents_url` 拉 PR head 正文 → hunk ±40 行窗口打包 → 每个 pack 打一次 OpenRouter
+6. `summary` + `findings` 写入 Postgres；前端轮询 `pending → processing → completed / failed`
+7. 满 1 小时整单再跑一次；第二次超时或全部 pack 失败则 `failed`
+8. 本地 Beat / 生产 Cron 每 6 小时按 job 的 `updated_at` 回收卡死的 `processing`
+
+重试分三层，不要混在一起：
+
+| 层 | 行为 |
+|---|---|
+| 单次 OpenRouter 调用 | 空内容 / 5xx 最多再打 3 次**同一段 payload**；超时不上这一层重试 |
+| 单个 pack | 失败记进 `error_message`，继续后面的 pack；全部失败才 `failed`。模型窗口超限再拆 pack 是 11A-3，尚未做 |
+| 整段 job | Celery soft limit 1 小时后 `self.retry()` **一次**；第二次 `failed` |
+
 ## 项目目的
 
 这个项目用于系统学习和展示现代软件工程能力，包括：
@@ -28,9 +70,9 @@ CodeGuard AI 是一个面向开发者的 AI Code Review SaaS 项目。它的目�
 - Async / Infra: RabbitMQ（本地 Compose + 生产 CloudAMQP Little Lemur）, Celery Worker；本地 Celery Beat，生产用 Northflank Cron 替代 Beat
 - Local Orchestration: Docker Compose（api + worker + beat + rabbitmq）
 - Hosting: Vercel Hobby（前端）、Northflank Developer Sandbox（API + worker + cron）
-- CI/CD: GitHub Actions（PR 门禁已接入；`main` 将后端镜像推到 GHCR。Northflank 仍从 Git 构建，见 10E-3）
+- CI/CD: GitHub Actions（PR 门禁；合入 `main` 后推 GHCR）。Northflank API / worker 从 `ghcr.io/<owner>/repo-guard-backend:main` 部署；前端走 Vercel Git Integration
 
-Architecture 最终完成的流程：Github -> Webhook -> BackendAPI -> RabbitMQ -> Celery -> OpenRouter -> Postgres -> Frontend
+Architecture 最终完成的流程：GitHub / 浏览器 → FastAPI → RabbitMQ → Celery → OpenRouter → Postgres → 前端轮询。
 
 ### 前端技术落地
 
@@ -44,26 +86,11 @@ README 原定前端栈与当前使用情况：
 
 ## 当前系统流程
 
-目前已经打通的主流程如下：
-
-1. 用户在前端通过 GitHub 登录（httpOnly cookie session）
-2. 后端保存用户信息和访问凭证
-3. 前端展示已同步 repositories，并支持手动 sync
-4. 前端展示某个 repository 下的 pull requests，并支持手动 sync
-5. 后端可同步某个 pull request 下的 changed files 和 patch
-6. `POST /pull-requests/{id}/review-jobs` 创建 job（`pending`）并入队，返回 `202 Accepted`
-7. Celery worker 后台执行 review（小 PR 单次请求，大 PR chunking）
-8. 调用 OpenRouter 生成结构化 `summary` + `findings` 并落库
-9. 前端 PR 详情触发 review，并以 TanStack Query 轮询 `pending -> processing -> completed / failed`
-10. 前端展示 `result_summary` 与 findings，可按文件 / 严重级别过滤，并跳到对应 diff 行号
-11. GitHub `pull_request` webhook（HMAC 验签）入队后，worker 自动 sync files、创建 review job 并走现有 AI pipeline
-12. 本地 Celery Beat / 生产 Northflank Cron 定期回收卡在 `processing` 的僵尸 job
-
-
+见文首「系统运行流程」。下面路线图按步骤记录实现历史。
 
 ## 项目路线图
 
-整个项目可以分为 11 个主要步骤。每一步都对应一个明确的工程目标，而不是为了堆技术而堆技术。Step 1–8 已完成功能闭环；Step 9A–9C 已完成 webhook 自动 review 与两层幂等；9D 评论暂缓；Step 10A–10D 已完成 0 成本部署（Vercel + Northflank + CloudAMQP）；10E 已完成 CI 门禁与 GHCR 镜像推送；下一步是 Northflank 先迁移再部署同一 digest；Step 11 是产品化补强。
+整个项目可以分为 11 个主要步骤。每一步都对应一个明确的工程目标，而不是为了堆技术而堆技术。Step 1–8 已完成功能闭环；Step 9A–9C 已完成 webhook 自动 review 与两层幂等；9D 评论暂缓；Step 10A–10E 已完成 0 成本部署与 CI/CD（Vercel + Northflank 吃 GHCR `:main` + CloudAMQP）；10F 跳过；Step 11A 已落地忽略噪声、GitHub 窗口打包和 1 小时整单重试，11A-3（模型超限再拆 pack）未做，其余产品化补强随后。
 
 ### Step 1: 项目初始化
 
@@ -113,7 +140,7 @@ README 原定前端栈与当前使用情况：
 - 支持小 PR 单请求 review
 - 支持大 PR fallback chunking
 
-状态：已完成
+状态：已完成（运行时路径已由 Step 11A 的窗口打包取代）
 
 ### Step 5: AI Review v1
 
@@ -203,12 +230,12 @@ README 原定前端栈与当前使用情况：
 要做的事情：
 
 - 增加任务级重试（瞬时 HTTP/网络错误 + 指数退避）
-- 增加超时控制（soft/hard time limit）
+- 增加超时控制（soft/hard time limit；review 任务 1 小时掐断后整单再跑一次）
 - 增加日志和错误记录（worker 写回 `review_jobs.error_message`）
 - 终态 job 幂等跳过，避免 at-least-once 重复执行
-- Celery Beat 自动回收 stale `processing` jobs
+- Celery Beat 自动回收 stale `processing` jobs（本地每 6 小时；按每个 job 的 `updated_at`）
 - 本地 `compose.yaml`：api + worker + beat + rabbitmq
-- task 层失败路径自动化测试（soft timeout / 重试耗尽 / reclaim）
+- task 层失败路径自动化测试（第一次 soft timeout 整单重试 / 第二次写 `failed` / 重试耗尽 / reclaim）
 
 状态：已完成
 
@@ -435,7 +462,7 @@ FastAPI
 #### Phase 10D: Northflank Runtime
 
 - Service 1：FastAPI API（`nf-compute-10`，公开 HTTP 8000，`/health/live`）
-- Service 2：Celery worker，同一镜像，CMD override，`concurrency=1`，不公开端口
+- Service 2：Celery worker，同一镜像，CMD override，`concurrency=1 --without-gossip --without-mingle --without-heartbeat`，不公开端口
 - Broker：CloudAMQP Little Lemur（`amqps://`）。Northflank Sandbox 的 RabbitMQ Addon compute plan 全部灰色，无法在 0 成本下启用，因此不占用 Sandbox 的 1 个 Addon 名额
 - Cron Job：每 10 分钟运行 `mark_abandoned_jobs_as_failed`，替代占用第三个 Service 的常驻 Celery Beat
 - 运行时环境变量注入 Neon、Upstash、OpenRouter、GitHub 和 CloudAMQP；不启用付费扩容、额外 Service、持久卷或超出 Sandbox 的资源
@@ -445,16 +472,21 @@ FastAPI
 #### Phase 10E: CI/CD
 
 - GitHub Actions CI：后端 pytest、Alembic head / migration 检查、前端 lint / typecheck / build、Docker build
-- 合并到 `main` 且 CI 全绿后，将后端镜像推到 `ghcr.io/<owner>/repo-guard-backend:<git-sha>` 和 `:main`
-- 先运行 Northflank migration Job：`alembic upgrade head`（尚未接入；占用第 2 个 Job 名额）
-- migration 成功后，API 与 worker 部署同一个 immutable image digest（尚未接入；当前 Combined 仍从 Git 构建）
-- migration 失败立即停止发布，不更新 API / worker
-- Northflank 使用 Template / API / Release Flow 管理资源；当前 Terraform provider 无法完整管理 Service / Job / Addon，不用 `local-exec` 伪装完整 IaC
+- 合并到 `main` 且 CI 全绿后，将后端镜像推到 `ghcr.io/<owner>/repo-guard-backend:<git-sha>` 和 `:main`；PR 不推镜像
+- API 与 worker 均为 Northflank Deployment（外部镜像），不再用 Combined 从 Git 构建；镜像路径 `ghcr.io/<owner>/repo-guard-backend:main`
+- Sandbox 没有「先迁移再部署」的发布管道。关掉自动更新等于每次发版都手点，所以生产跟 `:main` 自动拉新镜像
+- 改表结构：本地对生产 Neon 跑 `alembic upgrade head`，确认完成后再合入 `main`。没有结构变更则直接合入
+- 删列 / 删表 / 改列名会让仍在跑的旧进程对着新库摔；日常只加表、加列。Northflank migrate Job 留作备用，不是日常路径
 - 前端由 Vercel Git Integration 发布；PR 生成 Preview，`main` 发布 Production
+- 不用 Terraform 管理 Northflank Service / Job / Addon
 
-状态：CI 门禁与 GHCR 推送已完成。PR 不推镜像。生产运行时尚未改吃 GHCR。
+状态：已完成。10F 跳过。11A 打包与超时已落地，下一步是 11A-3。
 
 #### Phase 10F: Observability / Rollback / Zero-Cost Guardrails
+
+状态：跳过。当前全是免费档，排障用 Northflank Logs、GitHub webhook 投递记录和 CloudAMQP 控制台即可。出问题或用量顶满再补，不单独做一阶段。
+
+原计划（未做）：
 
 - API / worker 结构化日志包含 delivery ID、review job ID 和 Celery task ID
 - 监控 API 5xx、worker 离线、RabbitMQ 队列堆积、stale job、migration 失败
@@ -469,12 +501,68 @@ FastAPI
 - 每个实验设置预算告警和销毁步骤，结束后执行 `terraform destroy`
 - Kubernetes / Terraform 学习成果后续再迁移到正式付费生产方案，不把单节点免费环境描述为高可用生产集群
 
-状态：Phase 10A–10D 已完成。10E 已完成 CI 与 GHCR 推送。下一步是让 Northflank 先跑 migrate Job，再把 API/worker 换成同一 GHCR digest。
+状态：Phase 10A–10E 已完成。10F 跳过。11A 打包与超时已落地，下一步是 11A-3。
 
 ### Step 11: 产品化补强（不阻塞 Step 9）
 
 目的：在 Step 8 功能闭环已经可用的前提下，把安全、体验、测试和模型质量补到更接近工业产品。每一条都标明在优化哪一步的哪一点。  
-状态：未开始
+状态：11A 大部分已落地（忽略噪声、GitHub 窗口打包、1 小时整单重试、无 skip 单测）。未做 11A-3（模型报窗口超限再拆这一次请求）。其余产品化项未开始。生产模型是 `openrouter/free`（随机免费模型，上下文窗口未知），按偏小字符预算切分，不按某个固定模型的 token 上限。
+
+#### 11A: Review 输入打包（优先）
+
+针对 Step 6 chunking 和 Step 7B worker 执行。旧 combined / hunk 两档已从运行时移除（git 历史可查）。现在：过滤噪声 → GitHub 窗口 → 贪婪 pack。
+
+硬约束（高于「任务必须 complete」、高于「少打几次 API」）：
+
+- 过滤名单之外、PR 里该审的文件 **一个都不能 skip**。装不进当前 pack 的部分进入 **下一个 pack**，禁止丢掉文件后半段。
+- 产出必须有用：切分时要有变更前后的源码上下文。库里只有 GitHub `patch`（hunk 自带约 3 行），不够就用 Contents API / blob `sha` 拉该文件，再取 hunk 附近行。全文只在这次 review 进内存，不写库。
+- 生产是 `openrouter/free`，窗口未知；pack 字符预算按 `REVIEW_PACK_MAX_CHARS × 0.6` 预留 prompt/回复空间，不是按某个模型的 token 上限。
+- 任务墙钟超时 1 小时（Celery soft limit）。到点重试 **一次**；第二次再超时或失败则标 `failed`。不是靠 skip 文件来换 `completed`。
+
+已落地：
+
+1. **忽略噪声文件**（11A-1）  
+   lockfile、`__pycache__`、图片、生成物等不送模型。
+
+2. **取消 combined / chunk 两档，次数不封顶**（11A-2）  
+   每个 pack 一次模型请求。没有 `REVIEW_PACK_MAX_CALLS`。装不下就开下一 pack，余量不丢。
+
+3. **单文件超过一个 pack：拉 GitHub 文件，按 hunk 窗口切**（11A-2）  
+   用已存的 `sha` / `contents_url` 取 PR head 正文（Contents 403/缺失则走 git blob）。每个变更窗口 = `@@` 行号 ± `REVIEW_CONTEXT_LINES`（默认 40），相邻窗口重叠则合并。  
+   窗口仍大于预算 → 按行切开后继续装后续 pack。GitHub 没给 `patch` 的过大文件同样拉全文再切。
+
+4. **模型失败与 1 小时超时**（11A-4）  
+   某次 pack 调用失败记进 `error_message`，其余 pack 继续跑；全部失败才 `failed`。  
+   Celery `soft_time_limit=3600`，`time_limit=4200`（给写库和 `self.retry()` 留时间）。第一次超时整单再跑，第二次写 `failed`。  
+   单次 OpenRouter **超时不重试**；空内容 / 5xx 才对**同一 payload** 最多再打 3 次。  
+   `OPENROUTER_READ_TIMEOUT` / `wait_for` 为 7200 秒，大于 soft limit，墙钟掐断只认 Celery。  
+   过期 `processing` 回收每 **6 小时** 跑一轮，按 **每个 job 自己的 `updated_at`**；阈值 **10800 秒（3 小时）**。
+
+5. **单测**（11A-5 一部分）  
+   噪声过滤、每个业务文件都进某个 pack、大文件余量进后续 pack、窗口带上下文、无 patch 文件仍覆盖、超长单行切开、GitHub raw/403→blob/base64 JSON。
+
+清单：
+
+- [x] **11A-1 忽略噪声文件**
+- [x] **11A-2 全覆盖打包 + GitHub 上下文窗口**
+- [ ] **11A-3 单次请求超限再拆** — 拆的是这一次 pack 请求（多文件 pack 拆两半，单窗口再缩小上下文半径），不是把文件从队列里拿掉。
+- [x] **11A-4 模型失败与 1 小时超时**
+- [x] **11A-5 打包单测** — 无 skip / 窗口上下文 / 无 patch。大 PR 集成路径（部分成功、全部失败、模型超限再拆）仍待补，见下方测试计划。
+
+合入 / 上生产前 checklist（环境变量在 **Northflank api + worker**，不是 Neon）：
+
+- Worker CMD：`celery -A app.core.celery_app:celery_app worker -l INFO --concurrency=1 --without-gossip --without-mingle --without-heartbeat`（关掉后才不会空转打满 CloudAMQP 月额度）
+- `OPENROUTER_READ_TIMEOUT=7200`
+- `CELERY_TASK_SOFT_TIME_LIMIT=3600`
+- `CELERY_TASK_TIME_LIMIT=4200`
+- `CELERY_TASK_RECLAIM_INTERVAL_SECONDS=21600`
+- `REVIEW_JOB_STALE_PROCESSING_SECONDS=10800`
+- `REVIEW_PACK_MAX_CHARS=8000`
+- `REVIEW_CONTEXT_LINES=40`
+- `REVIEW_RETRY_ATTEMPTS=3`（只作用于单次调用的空内容/5xx，不是整单 3 次）
+- 去掉 `REVIEW_PACK_MAX_CALLS` 以及旧的 `REVIEW_MAX_COMBINED_*` / `REVIEW_MAX_PATCH_CHARS`
+- Cron / Beat 间隔与 `CELERY_TASK_RECLAIM_INTERVAL_SECONDS` 一致（`0 */6 * * *`）
+- 这次没有新的 Alembic，不必改 Neon
 
 #### 安全与鉴权
 
@@ -504,7 +592,7 @@ FastAPI
 - [ ] **OpenRouter 空内容 / 非 JSON** — 针对 Step 5「接入 OpenRouter」和 Step 6「结构化输出解析」：免费/路由模型会返回 `content: null` 或 `User Safety: safe`，靠重试才成功。可换具体 chat 模型、加强日志、按模型可选 `response_format`。
 - [ ] **单次生成墙钟超时** — 针对 Step 7E「超时控制」：httpx `read` 只限制两次 socket 读的间隔；已用 `asyncio.wait_for` 兜底，需保证 **rebuild worker** 后生效。
 - [ ] **前端轮询间隔** — 针对 Step 8C「轮询 job 状态」：当前 `refetchInterval = 60000`，pending/processing 体感偏慢。可缩短，或后续改 SSE/WebSocket。
-- [ ] **Chunk 路径集成测试** — 针对 Step 6 findings 落库/去重 和 Step 7B worker 执行：大 PR、部分成功、全部失败、路径 fallback 仍主要靠手工。不阻塞 Step 9，但应补进自动化。
+- [ ] **Chunk / pack 路径集成测试** — 打包单测已有；大 PR、部分成功、全部失败、模型超限再拆（11A-3）仍待补，不再按「固定 hunk 切片」验收。
 - [ ] **展示层自动化** — 针对 Step 8C/8D：触发 review、选中 job、过滤 findings、无效 `jobId` 显示 not found，目前只有手工步骤。
 - [ ] **API / Webhook 集成测试** — 针对 Step 3、7、9：补 OAuth 鉴权、HMAC/ping、delivery 重放、活跃 job 去重、同步与 review 成功路径测试；当前自动化主要覆盖 Celery task wrapper 的失败路径。
 - [ ] **GitHub API 分页** — 针对 Step 3 的 repositories / pull requests / files 同步：当前单次请求最多取 100 条；必须遍历 GitHub `Link` 分页，避免大型账号、仓库或 PR 静默丢数据。
@@ -539,23 +627,23 @@ FastAPI
 - Pull Request 同步
 - Pull Request files / patch 同步
 - Review job 数据模型
-- Diff chunking
+- Diff chunking（运行时已改为 GitHub 上下文窗口打包）
 - OpenRouter 在线模型调用
-- 小 PR 单请求 review，大 PR fallback chunking
+- 过滤噪声后按 pack 请求；无 patch 的业务文件仍拉 GitHub 正文覆盖
 - Review findings 数据表
 - 结构化 review 输出解析
 - findings 落库与去重
-- chunk 模式失败重试与部分成功保留
+- pack 失败记错误并继续其余 pack；全部失败才 `failed`
 - `GET /review-jobs/{id}` 查询接口
 - RabbitMQ + Celery 最小消息流
 - Celery worker 后台执行 `execute_review_job()`
 - `POST /pull-requests/{id}/review-jobs` 异步化为 `202 Accepted`
 - `GET /pull-requests/{id}/review-jobs` 历史任务列表接口
 - Celery task 级重试（瞬时错误 + 指数退避）
-- Celery soft/hard time limit，超时写回 `failed`
-- worker 层错误写回 `review_jobs.error_message`
+- Celery soft/hard time limit：满 1 小时整单再跑一次，第二次超时写回 `failed`
+- worker 层错误写回 `review_jobs.error_message`（空 `TimeoutError` 会补成可读文案）
 - 终态 job 幂等跳过
-- Celery Beat 自动回收 stale `processing` jobs
+- Celery Beat / Northflank Cron 每 6 小时回收 stale `processing` jobs（按 job `updated_at`，阈值 3 小时）
 - 本地 compose：api + worker + beat + rabbitmq
 - task 层失败路径自动化测试
 - 后端 CORS + GitHub OAuth 回跳前端 + httpOnly cookie session
@@ -576,12 +664,12 @@ FastAPI
 - 开发环境用 ngrok 把 `localhost:8000` 暴露给 GitHub（非架构组件）；生产 webhook 直连 Northflank API
 - Vercel Hobby 托管前端；浏览器只请求同源 `/api`，由 rewrite 转到 Northflank FastAPI
 - 生产 GitHub OAuth callback 为 Vercel `/api/auth/github/callback`；httpOnly Cookie 落在 Production 域名
-- Northflank Sandbox：API Service + Celery worker Service（`nf-compute-10`）+ reclaim Cron Job
+- Northflank Sandbox：API Service + Celery worker Service（`nf-compute-10`，GHCR `:main`）+ reclaim Cron Job + 备用 migrate Job
 - CloudAMQP Little Lemur 作为生产 RabbitMQ；本地 Compose 仍用容器内 RabbitMQ + Beat
 
 当前已经具备手动与自动两条入口：用户可在浏览器里「登录 → sync → Run AI review → 读 findings」；GitHub webhook 也可入队并走同一条 AI pipeline。9C 已阻止同一 delivery 重放和同一 PR 的活跃 job 重复创建。生产上手动 review 与 webhook Redeliver 已通；push 触发自动 review 仍待补测。对象级 user 隔离已有但尚未用自动化测试锁住；UI 仍是功能向 MVP。
 
-从路线图角度看，当前已经完成 Step 1 到 Step 9C、Step 10A–10D，以及 10E 的 CI / GHCR 推送。9D 评论回写暂缓。下一步是 Northflank 按 digest 先迁移再部署。
+从路线图角度看，当前已经完成 Step 1 到 Step 9C、Step 10A–10E。9D 评论回写暂缓。10F 跳过。11A-1/2/4 与打包单测已落地。下一步是 11A-3（模型超限再拆 pack）。
 
 ## 当前核心数据模型
 
@@ -599,19 +687,16 @@ FastAPI
 
 ## 下一步计划
 
-GitHub webhook 自动 review、9C 两层幂等，以及 10A–10D 的 0 成本部署已经完成。按优先级推进：
+GitHub webhook 自动 review、9C 两层幂等，以及 10A–10E 的 0 成本部署和 CI/CD 已经完成。10F 跳过。11A 打包与 1 小时整单重试已落地。按优先级推进：
 
-1. Step 10E 剩余：Northflank migrate Job + API/worker 改吃 GHCR 同一 digest；前端继续走 Vercel Git Integration
-2. Step 10F：结构化日志、回滚与免费额度护栏
-3. Step 11：安全测试、UI polish、模型质量与集成测试（可与 10E/10F 并行）
+1. Step 11A-3：模型报窗口超限时拆的是这一次 pack 请求，不能把文件从队列拿掉
+2. 补测：对已 sync 仓库 `git push` 后，生产 webhook 是否自动创建并完成 review job
+3. Step 11 其余：安全测试、UI polish、模型质量
 4. Step 9D（可选、暂缓）：findings 写回 GitHub PR 评论
-5. 补测：对已 sync 仓库 `git push` 后，生产 webhook 是否自动创建并完成 review job
-
-chunk 模式的更系统化集成测试已记入 Step 11，不阻塞 CI/CD。
 
 ## 项目状态
 
-当前项目已完成 GitHub 集成、结构化 AI review、异步任务、前端展示、webhook 驱动的自动 review、delivery/active job 两层幂等，以及 Vercel + Northflank + CloudAMQP 的 0 成本部署。9D GitHub 评论回写暂缓。10E 已有 PR 门禁，合入 `main` 后会把后端镜像推到 GHCR。下一步是让 Northflank 先迁移再部署该镜像，而不是继续从 Git 各编一份。
+当前项目已完成 GitHub 集成、结构化 AI review、异步任务、前端展示、webhook 驱动的自动 review、delivery/active job 两层幂等，以及 Vercel + Northflank + CloudAMQP 的 0 成本部署。9D GitHub 评论回写暂缓。10E：合入 `main` 推 GHCR，API / worker 跟 `:main`。改表则本地先对生产 Neon 迁移再合入。10F 跳过。11A 打包与 1 小时整单重试已落地；下一步 11A-3。上线 worker 必须改超时 / packing 环境变量，并加上 `--without-gossip --without-mingle --without-heartbeat`。
 
 ## 当前阶段测试计划
 
@@ -619,12 +704,13 @@ Step 7E 的 task 层失败路径和 Step 9C 的核心幂等路径已经用自动
 
 已完成验证：
 
-- 小 PR 可走单次 review 请求
+- 小 PR 可走打包 review（能装进一个 pack 时 `total_chunks` 在执行后为 1；创建时为 0）
 - `summary` 与 `findings` 可成功解析
 - `summary` 与 `findings` 可成功写入数据库
 - `review_jobs` 接口能够返回结构化结果
 - compose 可启动 api / worker / beat / rabbitmq
-- task 层 soft timeout 会写回 `failed`
+- task 层第一次 soft timeout 会整单重试，不写 `failed`
+- task 层第二次 soft timeout 会写回 `failed`
 - task 层瞬时错误重试耗尽会写回 `failed`
 - Beat reclaim task 会调用回收逻辑
 - 前端 GitHub 登录 / 登出 / session 保持
@@ -638,41 +724,43 @@ Step 7E 的 task 层失败路径和 Step 9C 的核心幂等路径已经用自动
 - 本地：push 到已 sync 仓库的 PR 后，不点 Run AI review 也会自动出现 review job 并可以 `completed`（生产 push 路径待补测）
 - 相同 `delivery_id` 重放返回 2xx 且不重复 dispatch；broker 发布失败会删除 delivery 记录以允许 GitHub 重试
 - 同一 PR 已有 `pending` / `processing` job 时，手动与 webhook 入口复用已有 job，不重复创建或入队
-- 当前后端自动化测试共 10 个并全部通过
+- 噪声文件不进入 pack；无 patch 的业务文件仍生成窗口；大文件余量进入后续 pack
+- 当前后端自动化测试共 37 个
 
-仍建议补完的测试（Step 11，不阻塞 Step 10）：
+仍建议补完的测试（Step 11A-3 / 集成路径，不阻塞已落地的打包）：
 
 1. 小 PR 成功路径测试
-  - 条件：改动总量小于 1000 行，且文件数不超过 30
+  - 条件：过滤后的输入能装进一个 pack
   - 预期：`total_chunks = 1`
   - 预期：`status = completed`
   - 预期：`result_summary` 不为空
   - 预期：`findings` 可正常入库并随接口返回
-2. 大 PR chunk 模式成功路径测试
-  - 条件：改动总量超过单次 review 阈值
-  - 预期：进入 chunk 模式，`total_chunks > 1`
-  - 预期：成功 chunk 的 `summary` 会拼接进 `result_summary`
-  - 预期：成功 chunk 的 `findings` 会写入数据库
-3. chunk 失败重试测试
-  - 条件：人为制造某个 chunk 返回非法 JSON 或解析失败
-  - 预期：单个 chunk 会自动重试 3 次
-  - 预期：3 次失败后记录失败日志
-  - 预期：不会中断后续 chunk 的执行
+2. 大 PR 打包路径测试
+  - 条件：过滤噪声后仍超过一个 pack
+  - 预期：`total_chunks` 等于 pack 次数（不是 hunk 数）
+  - 预期：每个该审文件都出现在某个 pack 里
+  - 预期：成功 pack 的 `summary` 会拼接进 `result_summary`
+  - 预期：成功 pack 的 `findings` 会写入数据库
+3. pack 超限再拆测试（11A-3，未实现）
+  - 条件：人为返回上下文超限
+  - 预期：把该 pack 拆开再请求，而不是对同一输入连打 3 次
+  - 预期：拆后仍失败则记错误并继续后续 pack，不把文件当 skip
 4. 部分成功测试
-  - 条件：部分 chunk 成功，部分 chunk 失败
+  - 条件：部分 pack 成功，部分失败
   - 预期：整个 review job 仍可 `completed`
-  - 预期：`error_message` 中包含失败 chunk 信息
-  - 预期：数据库中保留成功 chunk 产出的 findings
-5. 全部 chunk 失败测试
-  - 条件：所有 chunk 都返回非法结果
+  - 预期：`error_message` 中包含失败信息
+  - 预期：数据库中保留成功 pack 产出的 findings
+5. 全部 pack 失败测试
+  - 条件：所有 pack 都失败
   - 预期：整个 review job 标记为 `failed`
   - 预期：`error_message` 中包含失败原因汇总
-6. 去重与路径补全测试
-  - 条件：不同 chunk 产出重复 findings，或 finding 缺少 `file_path`
+6. 去重、路径补全与忽略名单测试
+  - 条件：lockfile 等噪声文件在 diff 里；不同 pack 产出重复 findings，或 finding 缺少 `file_path`
+  - 预期：噪声文件不进入任何 pack
   - 预期：重复 findings 会被去重
-  - 预期：chunk 模式下缺失的 `file_path` 会被 fallback 补齐
+  - 预期：pack 内缺失的 `file_path` 会被 fallback 补齐
 
-这些测试对应 Step 11「Chunk 路径集成测试」，不阻塞 Step 9。展示层已可消费已稳定的小 PR 成功路径。
+这些测试对应 Step 11A。打包单测已覆盖无 skip / 上下文 / 无 patch；展示层已可消费已稳定的小 PR 成功路径。
 
 Test command
 
@@ -720,7 +808,7 @@ docker compose up -d rabbitmq
 start celery worker: 
 
 ```
-celery -A app.core.celery_app:celery_app worker -l INFO
+celery -A app.core.celery_app:celery_app worker -l INFO --concurrency=1 --without-gossip --without-mingle --without-heartbeat
 ```
 
 start celery beat: 

@@ -39,14 +39,18 @@ class Settings(BaseSettings):
 
     # OpenRouter timeouts:
     openrouter_connect_timeout: float = 10.0
-    openrouter_read_timeout: float = 120.0
+    # Larger than the 1h Celery soft limit so wait_for/httpx never
+    # beat SoftTimeLimitExceeded and mark the job failed first.
+    openrouter_read_timeout: float = 7200.0
 
-    # Use larger defaults for debugging single-request review behavior first.
-    review_max_combined_chars: int = 120000
-    review_max_patch_chars: int = 20000
-    review_max_combined_files: int = 30
-    review_max_combined_changes: int = 1000
+    # Original combined/chunk limits. Unused after GitHub window packing.
+    # review_max_combined_chars: int = 120000
+    # review_max_patch_chars: int = 20000
+    # review_max_combined_files: int = 30
+    # review_max_combined_changes: int = 1000
     review_retry_attempts: int = 3
+    review_pack_max_chars: int = 8000
+    review_context_lines: int = 40
 
     # Upstash-backed distributed rate limiting. Local development may disable
     # it, but production validation requires fail-closed protection.
@@ -72,11 +76,11 @@ class Settings(BaseSettings):
     celery_task_max_retries: int = 3
     celery_task_retry_backoff_seconds: int = 5   # wait for x second before next try
     celery_task_retry_backoff_max: int = 300   #
-    celery_task_soft_time_limit: int = 660   # allow graceful failure handling before hard kill
-    celery_task_time_limit: int = 720   # hard stop on job if exceed this time
+    celery_task_soft_time_limit: int = 3600   # 1h wall clock; retry the whole job once
+    celery_task_time_limit: int = 4200   # above soft so retry can enqueue and persist
 
-    celery_task_reclaim_interval_seconds: float = 600   # auto mark stale jobs as failed
-    review_job_stale_processing_seconds: int = 900   # if a job stays in 'processing' longer than this, abandoned
+    celery_task_reclaim_interval_seconds: float = 21600   # scan stale jobs every 6 hours
+    review_job_stale_processing_seconds: int = 10800   # > 2h so a 1h run + 1 retry is not reclaimed
 
 
     model_config = SettingsConfigDict(
