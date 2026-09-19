@@ -40,7 +40,7 @@ flowchart TB
 
 | 层 | 行为 |
 |---|---|
-| 单次 OpenRouter 调用 | 空内容 / 5xx 最多再打 3 次**同一段 payload**；超时不上这一层重试 |
+| 单次 OpenRouter 调用 | 空内容 / 5xx / 429 最多再打 3 次**同一段 payload**，每次重试前等 35s（两次合计 70s，避开 20 RPM）。超时不上这一层重试 |
 | 单个 pack | 失败记进 `error_message`，继续后面的 pack；全部失败才 `failed`。模型窗口超限再拆 pack 是 11A-3，尚未做 |
 | 整段 job | Celery soft limit 1 小时后 `self.retry()` **一次**；第二次 `failed` |
 
@@ -534,7 +534,7 @@ FastAPI
 4. **模型失败与 1 小时超时**（11A-4）  
    某次 pack 调用失败记进 `error_message`，其余 pack 继续跑；全部失败才 `failed`。  
    Celery `soft_time_limit=3600`，`time_limit=4200`（给写库和 `self.retry()` 留时间）。第一次超时整单再跑，第二次写 `failed`。  
-   单次 OpenRouter **超时不重试**；空内容 / 5xx 才对**同一 payload** 最多再打 3 次。  
+   单次 OpenRouter **超时不重试**；空内容 / 5xx / 429 才对**同一 payload** 最多再打 3 次，每次重试前等 35s（两次合计 70s，覆盖 20 RPM 窗口）。  
    `OPENROUTER_READ_TIMEOUT` / `wait_for` 为 7200 秒，大于 soft limit，墙钟掐断只认 Celery。  
    过期 `processing` 回收每 **6 小时** 跑一轮，按 **每个 job 自己的 `updated_at`**；阈值 **10800 秒（3 小时）**。
 
@@ -559,7 +559,7 @@ FastAPI
 - `REVIEW_JOB_STALE_PROCESSING_SECONDS=10800`
 - `REVIEW_PACK_MAX_CHARS=8000`
 - `REVIEW_CONTEXT_LINES=40`
-- `REVIEW_RETRY_ATTEMPTS=3`（只作用于单次调用的空内容/5xx，不是整单 3 次）
+- `REVIEW_RETRY_ATTEMPTS=3`（只作用于单次调用的空内容/5xx/429，不是整单 3 次；每次重试前固定等 35s）
 - 去掉 `REVIEW_PACK_MAX_CALLS` 以及旧的 `REVIEW_MAX_COMBINED_*` / `REVIEW_MAX_PATCH_CHARS`
 - Cron / Beat 间隔与 `CELERY_TASK_RECLAIM_INTERVAL_SECONDS` 一致（`0 */6 * * *`）
 - 这次没有新的 Alembic，不必改 Neon

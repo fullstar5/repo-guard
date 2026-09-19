@@ -166,13 +166,17 @@ async def _review_content_with_retries(
             raise
         except Exception as exc:
             last_exc = exc
+            if attempt >= attempt_count:
+                break
             logger.warning(
-                "Review attempt %s/%s failed for %s: %s",
+                "Review attempt %s/%s failed for %s: %s; sleeping 35s",
                 attempt,
                 attempt_count,
                 request_label,
                 exc,
             )
+            # Two retries wait 70s total, past a 20 RPM 429 window.
+            await asyncio.sleep(35)
 
     assert last_exc is not None
     logger.error(
