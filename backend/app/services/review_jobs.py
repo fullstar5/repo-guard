@@ -300,37 +300,46 @@ async def execute_review_job(
     http_client: httpx.AsyncClient,
 ) -> ReviewJob:
     """Run a review job synchronously using the configured online provider."""
+    job_id = review_job.id
     pr_files = await get_pull_request_files(db, review_job.pull_request_id)
     logger.info(
         "Starting execute_review_job review_job_id=%s pull_request_id=%s total_files=%s",
-        review_job.id,
+        job_id,
         review_job.pull_request_id,
         len(pr_files),
     )
 
+    pull_request = await db.get(PullRequest, review_job.pull_request_id)
+    if pull_request is None:
+        raise ValueError(f"Pull request {review_job.pull_request_id} was not found")
+    repo_result = await db.execute(
+        select(Repository)
+        .options(selectinload(Repository.user))
+        .where(Repository.id == pull_request.repository_id)
+    )
+    repository = repo_result.scalar_one()
+    access_token = (
+        repository.user.github_access_token if repository.user is not None else None
+    )
+    # copy scalars so HTTP work never touches the ORM session.
+    owner_login = repository.owner_login
+    repo_name = repository.name
+    provider_name = review_job.provider
+    model_name = review_job.model_name
+
+
     review_job.status = ReviewJobStatus.processing
     await db.commit()
+    # After this commit the connection is returned. Do not query `db` until
+    # HTTP finishes, or Neon will see an idle-in-transaction again.
 
     try:
-        if review_job.provider != "openrouter":
-            raise ValueError(f"Unsupported provider: {review_job.provider}")
+        if provider_name != "openrouter":
+            raise ValueError(f"Unsupported provider: {provider_name}")
 
         provider = OpenRouterReviewProvider(
             http_client=http_client,
-            model_name=review_job.model_name,
-        )
-
-        pull_request = await db.get(PullRequest, review_job.pull_request_id)
-        if pull_request is None:
-            raise ValueError(f"Pull request {review_job.pull_request_id} was not found")
-        repo_result = await db.execute(
-            select(Repository)
-            .options(selectinload(Repository.user))
-            .where(Repository.id == pull_request.repository_id)
-        )
-        repository = repo_result.scalar_one()
-        access_token = (
-            repository.user.github_access_token if repository.user is not None else None
+            model_name=model_name,
         )
 
         windows: list[tuple[str, str]] = []
@@ -343,8 +352,8 @@ async def execute_review_job(
                         http_client,
                         access_token,
                         pr_file.contents_url,
-                        owner_login=repository.owner_login,
-                        repo_name=repository.name,
+                        owner_login=owner_login,
+                        repo_name=repo_name,
                         blob_sha=pr_file.sha,
                     )
                 except SoftTimeLimitExceeded:
@@ -372,7 +381,7 @@ async def execute_review_job(
         )
         logger.info(
             "Review job %s packed %s window(s) into %s request(s)",
-            review_job.id,
+            job_id,
             len(windows),
             len(packs),
         )
@@ -394,9 +403,9 @@ async def execute_review_job(
                 )
             except SoftTimeLimitExceeded:
                 raise
-            except Exception as exc:
+            except Exception as pack_exc:
                 pack_notes.append(
-                    f"{pack_label}: {_format_review_job_error(exc)}"
+                    f"{pack_label}: {_format_review_job_error(pack_exc)}"
                 )
                 continue
 
@@ -409,40 +418,42 @@ async def execute_review_job(
         if not summary_sections:
             raise ValueError("All review packs failed. " + " | ".join(pack_notes))
 
-        review_job.result_summary = "\n\n".join(summary_sections)
-        review_job.total_chunks = len(packs)
-        review_job.error_message = "\n".join(pack_notes) if pack_notes else None
+        async with AsyncSessionLocal() as write_db:
+            saved_job = await write_db.get(ReviewJob, job_id)
+            if saved_job is None:
+                raise ValueError(f"Review job {job_id} was not found")
 
-        logger.info("Review job %s replacing findings for packed path", review_job.id)
-        await replace_review_findings(
-            db=db,
-            review_job=review_job,
-            pr_files=pr_files,
-            findings=all_findings,
-        )
-        
-        review_job.status = ReviewJobStatus.completed
-        logger.info("Review job %s committing completed state", review_job.id)
-
-        await db.commit()
-        await db.refresh(review_job)
-        logger.info("Review job %s completed successfully", review_job.id)
-        return review_job
+            saved_job.result_summary = "\n\n".join(summary_sections)
+            saved_job.total_chunks = len(packs)
+            saved_job.error_message = "\n".join(pack_notes) if pack_notes else None
+            logger.info("Review job %s replacing findings for packed path", job_id)
+            await replace_review_findings(
+                db=write_db,  # CHANGED: was db=
+                review_job=saved_job,  # CHANGED: was review_job
+                pr_files=pr_files,
+                findings=all_findings,
+            )
+            saved_job.status = ReviewJobStatus.completed
+            logger.info("Review job %s committing completed state", job_id)
+            await write_db.commit()
+            await write_db.refresh(saved_job)
+            logger.info("Review job %s completed successfully", job_id)
+            return saved_job
 
     except SoftTimeLimitExceeded:
         raise
     except Exception as exc:
-        await db.rollback()
-
-
-        failed_job = await db.get(ReviewJob, review_job.id)
+        logger.exception("Review job %s failed during execution", job_id)
+        try:
+            await db.rollback()
+        except Exception:
+            logger.exception("Rollback failed for review_job_id=%s", job_id)
+        failed_job = await mark_review_job_failed_by_id(
+            job_id,
+            _format_review_job_error(exc),
+        )
         if failed_job is None:
             raise
-        failed_job.status = ReviewJobStatus.failed
-        failed_job.error_message = _format_review_job_error(exc)
-
-        await db.commit()
-        await db.refresh(failed_job)
         return failed_job
 
 

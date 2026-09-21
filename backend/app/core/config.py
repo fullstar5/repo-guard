@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     # review_max_combined_files: int = 30
     # review_max_combined_changes: int = 1000
     review_retry_attempts: int = 3
-    review_pack_max_chars: int = 8000
+    review_pack_max_chars: int = 16000
     review_context_lines: int = 40
 
     # Upstash-backed distributed rate limiting. Local development may disable
