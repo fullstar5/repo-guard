@@ -41,7 +41,7 @@ flowchart TB
 | 层 | 行为 |
 |---|---|
 | 单次 OpenRouter 调用 | 空内容 / 5xx / 429 最多再打 3 次**同一段 payload**，每次重试前等 35s（两次合计 70s，避开 20 RPM）。超时不上这一层重试 |
-| 单个 pack | 失败记进 `error_message`，继续后面的 pack；全部失败才 `failed`。模型窗口超限再拆 pack 是 11A-3，尚未做 |
+| 单个 pack | 失败记进 `error_message`，继续后面的 pack；全部失败才 `failed`。11A-3 超限再拆已取消 |
 | 整段 job | Celery soft limit 1 小时后 `self.retry()` **一次**；第二次 `failed` |
 
 ## 项目目的
@@ -90,7 +90,7 @@ README 原定前端栈与当前使用情况：
 
 ## 项目路线图
 
-整个项目可以分为 11 个主要步骤。每一步都对应一个明确的工程目标，而不是为了堆技术而堆技术。Step 1–8 已完成功能闭环；Step 9A–9C 已完成 webhook 自动 review 与两层幂等；9D 评论暂缓；Step 10A–10E 已完成 0 成本部署与 CI/CD（Vercel + Northflank 吃 GHCR `:main` + CloudAMQP）；10F 跳过；Step 11A 已落地忽略噪声、GitHub 窗口打包和 1 小时整单重试，11A-3（模型超限再拆 pack）未做，其余产品化补强随后。
+整个项目可以分为 11 个主要步骤。每一步都对应一个明确的工程目标，而不是为了堆技术而堆技术。Step 1–8 已完成功能闭环；Step 9A–9C 已完成 webhook 自动 review 与两层幂等；9D 评论暂缓；Step 10A–10E 已完成 0 成本部署与 CI/CD（Vercel + Northflank 吃 GHCR `:main` + CloudAMQP）；10F 跳过；Step 11A 已落地忽略噪声、GitHub 窗口打包和 1 小时整单重试。11A-3（模型超限再拆 pack）取消：单 pack 预算远小于 128k 级窗口。其余产品化补强随后。
 
 ### Step 1: 项目初始化
 
@@ -480,7 +480,7 @@ FastAPI
 - 前端由 Vercel Git Integration 发布；PR 生成 Preview，`main` 发布 Production
 - 不用 Terraform 管理 Northflank Service / Job / Addon
 
-状态：已完成。10F 跳过。11A 打包与超时已落地，下一步是 11A-3。
+状态：已完成。10F 跳过。11A 打包与超时已落地。11A-3 取消。
 
 #### Phase 10F: Observability / Rollback / Zero-Cost Guardrails
 
@@ -501,12 +501,12 @@ FastAPI
 - 每个实验设置预算告警和销毁步骤，结束后执行 `terraform destroy`
 - Kubernetes / Terraform 学习成果后续再迁移到正式付费生产方案，不把单节点免费环境描述为高可用生产集群
 
-状态：Phase 10A–10E 已完成。10F 跳过。11A 打包与超时已落地，下一步是 11A-3。
+状态：Phase 10A–10E 已完成。10F 跳过。11A 打包与超时已落地。11A-3 取消。
 
 ### Step 11: 产品化补强（不阻塞 Step 9）
 
 目的：在 Step 8 功能闭环已经可用的前提下，把安全、体验、测试和模型质量补到更接近工业产品。每一条都标明在优化哪一步的哪一点。  
-状态：11A 大部分已落地（忽略噪声、GitHub 窗口打包、1 小时整单重试、无 skip 单测）。未做 11A-3（模型报窗口超限再拆这一次请求）。其余产品化项未开始。生产模型是 `openrouter/free`（随机免费模型，上下文窗口未知），按偏小字符预算切分，不按某个固定模型的 token 上限。
+状态：11A 大部分已落地（忽略噪声、GitHub 窗口打包、1 小时整单重试、无 skip 单测）。11A-3（模型报窗口超限再拆这一次请求）取消，不再排期。其余产品化项未开始。手动 Run AI review 可选白名单里的 OpenRouter 模型；webhook 仍用 `OPEN_ROUTER_DEFAULT_MODEL`。
 
 #### 11A: Review 输入打包（优先）
 
@@ -545,9 +545,9 @@ FastAPI
 
 - [x] **11A-1 忽略噪声文件**
 - [x] **11A-2 全覆盖打包 + GitHub 上下文窗口**
-- [ ] **11A-3 单次请求超限再拆** — 拆的是这一次 pack 请求（多文件 pack 拆两半，单窗口再缩小上下文半径），不是把文件从队列里拿掉。
+- [x] **11A-3 单次请求超限再拆** — 取消。单 pack 字符预算远小于 128k 级窗口，不再把超限响应拆成更小请求。
 - [x] **11A-4 模型失败与 1 小时超时**
-- [x] **11A-5 打包单测** — 无 skip / 窗口上下文 / 无 patch。大 PR 集成路径（部分成功、全部失败、模型超限再拆）仍待补，见下方测试计划。
+- [x] **11A-5 打包单测** — 无 skip / 窗口上下文 / 无 patch。大 PR 集成路径（部分成功、全部失败）仍待补，见下方测试计划。超限再拆不再测。
 
 合入 / 上生产前 checklist（环境变量在 **Northflank api + worker**，不是 Neon）：
 
@@ -592,7 +592,7 @@ FastAPI
 - [ ] **OpenRouter 空内容 / 非 JSON** — 针对 Step 5「接入 OpenRouter」和 Step 6「结构化输出解析」：免费/路由模型会返回 `content: null` 或 `User Safety: safe`，靠重试才成功。可换具体 chat 模型、加强日志、按模型可选 `response_format`。
 - [ ] **单次生成墙钟超时** — 针对 Step 7E「超时控制」：httpx `read` 只限制两次 socket 读的间隔；已用 `asyncio.wait_for` 兜底，需保证 **rebuild worker** 后生效。
 - [ ] **前端轮询间隔** — 针对 Step 8C「轮询 job 状态」：当前 `refetchInterval = 60000`，pending/processing 体感偏慢。可缩短，或后续改 SSE/WebSocket。
-- [ ] **Chunk / pack 路径集成测试** — 打包单测已有；大 PR、部分成功、全部失败、模型超限再拆（11A-3）仍待补，不再按「固定 hunk 切片」验收。
+- [ ] **Chunk / pack 路径集成测试** — 打包单测已有；大 PR、部分成功、全部失败仍待补，不再按「固定 hunk 切片」验收。11A-3 超限再拆已取消，不在测试范围内。
 - [ ] **展示层自动化** — 针对 Step 8C/8D：触发 review、选中 job、过滤 findings、无效 `jobId` 显示 not found，目前只有手工步骤。
 - [ ] **API / Webhook 集成测试** — 针对 Step 3、7、9：补 OAuth 鉴权、HMAC/ping、delivery 重放、活跃 job 去重、同步与 review 成功路径测试；当前自动化主要覆盖 Celery task wrapper 的失败路径。
 - [ ] **GitHub API 分页** — 针对 Step 3 的 repositories / pull requests / files 同步：当前单次请求最多取 100 条；必须遍历 GitHub `Link` 分页，避免大型账号、仓库或 PR 静默丢数据。
@@ -607,7 +607,7 @@ FastAPI
 
 #### 产品边界（与 Step 9 的交界，但不替代 webhook）
 
-- [ ] **模型选择表单** — 针对 Step 8C 触发 review：单按钮写死 `openrouter/free`。若要可选模型，再用已安装的 React Hook Form + Zod。
+- [x] **模型选择** — 针对 Step 8C 触发 review：PR 页可选白名单模型（`openrouter/free`、`nvidia/nemotron-3-ultra-550b-a55b:free`）。未知 id 返回 422。Webhook 仍用服务器默认模型。
 - [ ] **组织 / 多成员** — 针对 Step 3 的「一用户镜像自己的 GitHub」模型：没有 org、没有分享仓库。
 - [ ] **评论写回 GitHub** — 即 Step 9D，不在 Step 8 范围；完成 9A–9C 后再做。
 
@@ -669,7 +669,7 @@ FastAPI
 
 当前已经具备手动与自动两条入口：用户可在浏览器里「登录 → sync → Run AI review → 读 findings」；GitHub webhook 也可入队并走同一条 AI pipeline。9C 已阻止同一 delivery 重放和同一 PR 的活跃 job 重复创建。生产上手动 review 与 webhook Redeliver 已通；push 触发自动 review 仍待补测。对象级 user 隔离已有但尚未用自动化测试锁住；UI 仍是功能向 MVP。
 
-从路线图角度看，当前已经完成 Step 1 到 Step 9C、Step 10A–10E。9D 评论回写暂缓。10F 跳过。11A-1/2/4 与打包单测已落地。下一步是 11A-3（模型超限再拆 pack）。
+从路线图角度看，当前已经完成 Step 1 到 Step 9C、Step 10A–10E。9D 评论回写暂缓。10F 跳过。11A-1/2/4 与打包单测已落地。11A-3 取消。手动 review 可选白名单模型。
 
 ## 当前核心数据模型
 
@@ -689,14 +689,14 @@ FastAPI
 
 GitHub webhook 自动 review、9C 两层幂等，以及 10A–10E 的 0 成本部署和 CI/CD 已经完成。10F 跳过。11A 打包与 1 小时整单重试已落地。按优先级推进：
 
-1. Step 11A-3：模型报窗口超限时拆的是这一次 pack 请求，不能把文件从队列拿掉
+1. 失败 pack 再审一轮，仍有缺口则 job 标 `partial`（尚未做）
 2. 补测：对已 sync 仓库 `git push` 后，生产 webhook 是否自动创建并完成 review job
 3. Step 11 其余：安全测试、UI polish、模型质量
 4. Step 9D（可选、暂缓）：findings 写回 GitHub PR 评论
 
 ## 项目状态
 
-当前项目已完成 GitHub 集成、结构化 AI review、异步任务、前端展示、webhook 驱动的自动 review、delivery/active job 两层幂等，以及 Vercel + Northflank + CloudAMQP 的 0 成本部署。9D GitHub 评论回写暂缓。10E：合入 `main` 推 GHCR，API / worker 跟 `:main`。改表则本地先对生产 Neon 迁移再合入。10F 跳过。11A 打包与 1 小时整单重试已落地；下一步 11A-3。上线 worker 必须改超时 / packing 环境变量，并加上 `--without-gossip --without-mingle --without-heartbeat`。
+当前项目已完成 GitHub 集成、结构化 AI review、异步任务、前端展示、webhook 驱动的自动 review、delivery/active job 两层幂等，以及 Vercel + Northflank + CloudAMQP 的 0 成本部署。9D GitHub 评论回写暂缓。10E：合入 `main` 推 GHCR，API / worker 跟 `:main`。改表则本地先对生产 Neon 迁移再合入。10F 跳过。11A 打包与 1 小时整单重试已落地。11A-3 取消。手动 review 可选白名单模型。上线 worker 必须改超时 / packing 环境变量，并加上 `--without-gossip --without-mingle --without-heartbeat`。
 
 ## 当前阶段测试计划
 
@@ -725,9 +725,9 @@ Step 7E 的 task 层失败路径和 Step 9C 的核心幂等路径已经用自动
 - 相同 `delivery_id` 重放返回 2xx 且不重复 dispatch；broker 发布失败会删除 delivery 记录以允许 GitHub 重试
 - 同一 PR 已有 `pending` / `processing` job 时，手动与 webhook 入口复用已有 job，不重复创建或入队
 - 噪声文件不进入 pack；无 patch 的业务文件仍生成窗口；大文件余量进入后续 pack
-- 当前后端自动化测试共 37 个
+- 当前后端自动化测试共 39 个
 
-仍建议补完的测试（Step 11A-3 / 集成路径，不阻塞已落地的打包）：
+仍建议补完的测试（集成路径，不阻塞已落地的打包。11A-3 已取消）：
 
 1. 小 PR 成功路径测试
   - 条件：过滤后的输入能装进一个 pack
@@ -741,20 +741,16 @@ Step 7E 的 task 层失败路径和 Step 9C 的核心幂等路径已经用自动
   - 预期：每个该审文件都出现在某个 pack 里
   - 预期：成功 pack 的 `summary` 会拼接进 `result_summary`
   - 预期：成功 pack 的 `findings` 会写入数据库
-3. pack 超限再拆测试（11A-3，未实现）
-  - 条件：人为返回上下文超限
-  - 预期：把该 pack 拆开再请求，而不是对同一输入连打 3 次
-  - 预期：拆后仍失败则记错误并继续后续 pack，不把文件当 skip
-4. 部分成功测试
+3. 部分成功测试
   - 条件：部分 pack 成功，部分失败
   - 预期：整个 review job 仍可 `completed`
   - 预期：`error_message` 中包含失败信息
   - 预期：数据库中保留成功 pack 产出的 findings
-5. 全部 pack 失败测试
+4. 全部 pack 失败测试
   - 条件：所有 pack 都失败
   - 预期：整个 review job 标记为 `failed`
   - 预期：`error_message` 中包含失败原因汇总
-6. 去重、路径补全与忽略名单测试
+5. 去重、路径补全与忽略名单测试
   - 条件：lockfile 等噪声文件在 diff 里；不同 pack 产出重复 findings，或 finding 缺少 `file_path`
   - 预期：噪声文件不进入任何 pack
   - 预期：重复 findings 会被去重

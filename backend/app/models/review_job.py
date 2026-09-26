@@ -1,5 +1,6 @@
 from datetime import datetime
 from enum import Enum as PyEnum
+from functools import partial
 
 from sqlalchemy import (  # pyright: ignore[reportMissingImports]
     DateTime,
@@ -24,6 +25,7 @@ class ReviewJobStatus(str, PyEnum):
     processing = "processing"
     completed = "completed"
     failed = "failed"
+    partial = "partial"
 
 
 class ReviewJob(Base):

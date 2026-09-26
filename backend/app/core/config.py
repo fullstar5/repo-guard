@@ -8,6 +8,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict  # pyright: ignor
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 
+# ADDED: manual Run AI review may only use these ids. Webhook keeps
+# open_router_default_model and does not follow the browser selection.
+REVIEW_MODEL_ALLOWLIST: tuple[str, ...] = (
+    "openrouter/free",
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+)
+
 
 class Settings(BaseSettings):
     environment: Literal["development", "test", "production"] = "development"
@@ -49,7 +56,7 @@ class Settings(BaseSettings):
     # review_max_combined_files: int = 30
     # review_max_combined_changes: int = 1000
     review_retry_attempts: int = 3
-    review_pack_max_chars: int = 16000
+    review_pack_max_chars: int = 102400
     review_context_lines: int = 40
 
     # Upstash-backed distributed rate limiting. Local development may disable

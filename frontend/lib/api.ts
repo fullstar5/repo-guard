@@ -178,12 +178,27 @@ export async function listReviewJobs(pullRequestId: number): Promise<ReviewJob[]
 }
 
 
-export async function createReviewJob(pullRequestId: number): Promise<ReviewJob> {
+export type ReviewModelList = {
+    models: string[];
+    default_model: string;
+};
+
+
+export async function listReviewModels(): Promise<ReviewModelList> {
+    const response = await api.get<ReviewModelList>("/review-models");
+    return response.data;
+}
+
+
+export async function createReviewJob(
+    pullRequestId: number,
+    modelName: string,
+): Promise<ReviewJob> {
     const response = await api.post<ReviewJob>(
         `/pull-requests/${pullRequestId}/review-jobs`,
         {
             provider: "openrouter",
-            model_name: "openrouter/free",
+            model_name: modelName,
         },
     );
     return response.data;

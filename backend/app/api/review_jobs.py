@@ -3,12 +3,14 @@ from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissing
 
 from app.api.deps import get_current_user, get_db
 from app.api.rate_limit_deps import limit_review_creation
+from app.core.config import REVIEW_MODEL_ALLOWLIST, get_settings
 from app.models.review_job import ReviewJobStatus
 from app.models.user import User
 from app.schemas.review_job import (
     CreateReviewJobRequest,
     ReviewJobListResponse,
     ReviewJobRead,
+    ReviewModelListResponse,
 )
 from app.services.review_jobs import (
     create_review_job_if_no_active,
@@ -19,6 +21,21 @@ from app.services.review_jobs import (
 from app.tasks.review_jobs import execute_review_job_task
 
 router = APIRouter(tags=["review-jobs"])
+settings = get_settings()
+
+
+@router.get("/review-models", response_model=ReviewModelListResponse)
+async def list_review_models(
+    current_user: User = Depends(get_current_user),
+):
+    """Return the models a user may pick for a manual review."""
+    default_model = settings.open_router_default_model
+    if default_model not in REVIEW_MODEL_ALLOWLIST:
+        default_model = REVIEW_MODEL_ALLOWLIST[0]
+    return ReviewModelListResponse(
+        models=list(REVIEW_MODEL_ALLOWLIST),
+        default_model=default_model,
+    )
 
 
 @router.post(
