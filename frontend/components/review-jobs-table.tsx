@@ -75,11 +75,10 @@ export function ReviewJobsTable({
                 <LeanTableCell>
                   <JobStatusChip status={job.status} />
                 </LeanTableCell>
-                <LeanTableCell
-                  className="max-w-[10rem] truncate text-[#a1a1aa]"
-                  title={job.model_name}
-                >
-                  {reviewModelLabel(job.model_name)}
+                <LeanTableCell className="max-w-[10rem] text-[#a1a1aa]">
+                  <span className="block truncate" title={job.model_name}>
+                    {reviewModelLabel(job.model_name)}
+                  </span>
                 </LeanTableCell>
                 <LeanTableCell className="tabular-nums text-[#a1a1aa]">
                   {isActiveJob(job) ? "—" : job.findings.length}

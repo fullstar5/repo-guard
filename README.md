@@ -693,6 +693,17 @@ GitHub webhook 自动 review、9C 两层幂等，以及 10A–10E 的 0 成本�
 2. 补测：对已 sync 仓库 `git push` 后，生产 webhook 是否自动创建并完成 review job
 3. Step 11 其余：安全测试、UI polish、模型质量
 4. Step 9D（可选、暂缓）：findings 写回 GitHub PR 评论
+5. Agent 与 streaming：开工时再把 worker 从 Celery 迁到 Taskiq（见下）。现在不改队列。
+
+### Worker 并发（已决定，先不改）
+
+当前 worker 继续用 Celery prefork。`--concurrency` 是子进程个数；每个子进程领一个 job，等 OpenRouter 时不领下一个。账号大约 20 RPM，同时两三个 job 就够，不为此自写消费者。
+
+不采用「aio-pika 解析 Celery 消息」：重试、软超时和定时回收都要重写，消息格式却还是 Celery 的。
+
+Agent 开工时换 Taskiq，RabbitMQ 用 `taskiq-aio-pika`，仍走现有 CloudAMQP。任务是 `async def`，一个进程里可以同时挂多条模型连接，并单独取消其中一轮。Streaming 不改数据路径：打开模型 HTTP 的那个进程把工具事件写入 Redis，API 读出来给浏览器。在那之前，现有 Celery 子进程也能写 Redis。
+
+FastStream 只做异步消费者，重试和定时回收要自己写。gevent 与当前异步数据库引擎冲突。ARQ 需要真正的 Redis 连接，Upstash REST 不行。Temporal 要多一个服务。这几项不采用。
 
 ## 项目状态
 
