@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
@@ -87,20 +87,15 @@ export default function PullRequestReviewPage() {
 
   const meQuery = useQuery(authMeQueryOptions);
   const { repository } = useRepository(repositoryId);
-
   const modelsQuery = useQuery({
     queryKey: ["review-models"],
     queryFn: listReviewModels,
     enabled: meQuery.isSuccess,
   });
-
-  useEffect(() => {
-    const models = modelsQuery.data?.models ?? [];
-    if (models.length === 0 || models.includes(modelName)) {
-      return;
-    }
-    setModelName(modelsQuery.data?.default_model ?? models[0]);
-  }, [modelsQuery.data, modelName]);
+  const modelOptions = modelsQuery.data?.models ?? ["openrouter/free"];
+  const defaultModel = modelsQuery.data?.default_model ?? modelOptions[0];
+  // CHANGED: pick a valid option while rendering. Do not setState inside an effect.
+  const selectedModel = modelOptions.includes(modelName) ? modelName : defaultModel;
 
   const prQuery = useQuery({
     queryKey: ["pull-requests", pullRequestId],
@@ -136,7 +131,7 @@ export default function PullRequestReviewPage() {
   });
 
   const createJobMutation = useMutation({
-    mutationFn: () => createReviewJob(pullRequestId, modelName),
+    mutationFn: () => createReviewJob(pullRequestId, selectedModel),
     onSuccess: () => {
       void queryClient.invalidateQueries({
         queryKey: ["pull-requests", pullRequestId, "review-jobs"],
@@ -166,7 +161,6 @@ export default function PullRequestReviewPage() {
   const tab = requestedTab ?? (historicalPin || hasFindings ? "review" : "files");
   const latestReviewHref = prLatestReviewHref(searchParams);
   const jobsHighlightId = explicitJob?.id ?? lastOpenedJobId ?? latestJob?.id;
-  const modelOptions = modelsQuery.data?.models ?? ["openrouter/free"];
   const runDisabled =
     createJobMutation.isPending || hasActiveJob || fileCount === 0;
   const runTitle =
@@ -223,7 +217,7 @@ export default function PullRequestReviewPage() {
           <label className="flex items-center gap-2 text-sm text-[#a1a1aa]">
             <span className="sr-only">Review model</span>
             <select
-              value={modelOptions.includes(modelName) ? modelName : modelOptions[0]}
+              value={selectedModel}
               onChange={(event) => setModelName(event.target.value)}
               disabled={runDisabled}
               aria-label="Review model"
