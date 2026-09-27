@@ -16,6 +16,18 @@ class CreateReviewJobRequest(BaseModel):
     @field_validator("model_name")
     @classmethod
     def model_name_must_be_allowed(cls, value: str) -> str:
+        """Reject model ids that are not on the manual-review allowlist.
+
+        Args:
+            value: ``model_name`` from the create-job request.
+
+        Returns:
+            The same id when it is allowed.
+
+        Raises:
+            ValueError: The id is not in ``REVIEW_MODEL_ALLOWLIST``. FastAPI
+            turns that into HTTP 422.
+        """
         # ADDED: reject ids that are not on the OpenRouter allowlist.
         if value not in REVIEW_MODEL_ALLOWLIST:
             allowed = ", ".join(REVIEW_MODEL_ALLOWLIST)

@@ -98,11 +98,16 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_settings(self) -> "Settings":
-        """
-        Reject unsafe production configuration before the process starts.
+        """Reject unsafe production configuration before the process starts.
 
         Local development keeps HTTP and localhost defaults. Production must
         use secure public URLs, secure cookies, and non-development secrets.
+
+        Returns:
+            This settings object when validation passes.
+
+        Raises:
+            ValueError: One or more settings are unsafe for the current environment.
         """
         errors: list[str] = []
         positive_rate_limit_settings = {
@@ -171,6 +176,12 @@ class Settings(BaseSettings):
 
     @property
     def sqlalchemy_database_url(self) -> str:
+        """Return the Neon URL with the psycopg driver prefix.
+
+        Returns:
+            ``postgresql+psycopg://...`` when the configured URL uses
+            ``postgresql://`` or ``postgres://``. Otherwise the original URL.
+        """
         if self.neon_postgres_url.startswith("postgresql://"):
             return self.neon_postgres_url.replace("postgresql://", "postgresql+psycopg://", 1)
 
@@ -182,4 +193,9 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
+    """Load settings once and reuse them for the process.
+
+    Returns:
+        The cached ``Settings`` instance read from the environment.
+    """
     return Settings()

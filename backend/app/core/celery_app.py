@@ -45,7 +45,14 @@ celery_app.conf.update(
 
 @setup_logging.connect
 def configure_celery_logging(**_kwargs) -> None:
-    """Keep worker/beat logs grep-friendly in production."""
+    """Install a single-line log format for worker and beat processes.
+
+    Args:
+        **_kwargs: Celery signal arguments. Unused.
+
+    Returns:
+        None.
+    """
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",

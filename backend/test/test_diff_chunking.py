@@ -19,6 +19,7 @@ def test_filter_reviewable_files_drops_noise_only():
         SimpleNamespace(filename="backend/uv.lock"),
         SimpleNamespace(filename="static/logo.png"),
         SimpleNamespace(filename="README.md"),
+        SimpleNamespace(filename="docs/introducation.md"),
     ]
 
     kept = filter_reviewable_files(files)

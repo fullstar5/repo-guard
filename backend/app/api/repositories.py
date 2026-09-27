@@ -27,6 +27,19 @@ async def sync_user_repositories(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """Replace the user's stored repositories with the current GitHub list.
+
+    Args:
+        request: Incoming request; its app state holds the HTTP client.
+        current_user: Authenticated user whose GitHub token is used.
+        db: Request-scoped async session.
+
+    Returns:
+        Repositories remaining after sync, including count.
+
+    Raises:
+        HTTPException: 400 when the user has no GitHub token.
+    """
     if not current_user.github_access_token:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -52,6 +65,15 @@ async def list_user_repos(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """List repositories stored for the current user.
+
+    Args:
+        current_user: Authenticated user.
+        db: Request-scoped async session.
+
+    Returns:
+        Stored repositories and their count. Does not call GitHub.
+    """
     repos = await list_repos_for_user(db, current_user.id)
     return RepositorySyncResponse(
         count=len(repos),

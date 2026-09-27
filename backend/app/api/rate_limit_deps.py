@@ -22,6 +22,14 @@ RATE_LIMIT_KEY_PREFIX = "repo-guard:rate-limit:v1"
 
 
 def _normalized_ip(value: str | None) -> str | None:
+    """Normalize one IP string.
+
+    Args:
+        value: Raw address, or None.
+
+    Returns:
+        The compressed IP, or None when the value is empty or not an IP.
+    """
     if not value:
         return None
 
@@ -32,11 +40,16 @@ def _normalized_ip(value: str | None) -> str | None:
 
 
 def get_client_ip(request: Request) -> str:
-    """
-    Resolve the nearest untrusted client address.
+    """Resolve the nearest untrusted client address.
 
     Reading from the right prevents a caller-supplied leftmost X-Forwarded-For
     value from bypassing limits when trusted proxies append their own entries.
+
+    Args:
+        request: Incoming request.
+
+    Returns:
+        A normalized IP, or ``"unknown"`` when none can be read.
     """
     forwarded_for = request.headers.get("x-forwarded-for")
     trusted_hops = settings.rate_limit_trusted_proxy_hops
@@ -60,7 +73,14 @@ def get_client_ip(request: Request) -> str:
 
 
 def _private_identifier(value: str) -> str:
-    """Keep raw client IP addresses out of Redis keys."""
+    """Hash a client identifier so raw IP addresses are not stored in Redis.
+
+    Args:
+        value: IP address or other client key.
+
+    Returns:
+        HMAC-SHA256 hex digest keyed by the JWT secret.
+    """
     return hmac.new(
         settings.jwt_secret_key.encode(),
         f"rate-limit:{value}".encode(),
@@ -72,6 +92,18 @@ async def _enforce(
     request: Request,
     rules: tuple[RateLimitRule, ...],
 ) -> None:
+    """Apply rate-limit rules, or return immediately when limiting is off.
+
+    Args:
+        request: Incoming request; its app state holds the HTTP client.
+        rules: Fixed-window buckets to increment together.
+
+    Returns:
+        None when the request is allowed.
+
+    Raises:
+        HTTPException: 429 when a bucket is full, 503 when Redis cannot decide.
+    """
     if not settings.rate_limit_enabled:
         return
 
@@ -97,6 +129,14 @@ async def _enforce(
 
 
 async def limit_oauth_requests(request: Request) -> None:
+    """Limit GitHub login and callback requests by client IP.
+
+    Args:
+        request: Incoming OAuth request.
+
+    Returns:
+        None when the request is allowed.
+    """
     client_ip_hash = _private_identifier(get_client_ip(request))
     await _enforce(
         request,
@@ -111,6 +151,14 @@ async def limit_oauth_requests(request: Request) -> None:
 
 
 def _sync_user_rule(user_id: int) -> RateLimitRule:
+    """Build the per-user sync bucket shared by repository, PR, and file sync.
+
+    Args:
+        user_id: Local user id.
+
+    Returns:
+        The user-wide sync rule.
+    """
     return RateLimitRule(
         key=f"{RATE_LIMIT_KEY_PREFIX}:sync:user:{user_id}",
         limit=settings.rate_limit_sync_user_requests,
@@ -124,6 +172,16 @@ def _sync_object_rule(
     object_type: str,
     object_id: int,
 ) -> RateLimitRule:
+    """Build a per-object sync bucket.
+
+    Args:
+        user_id: Local user id.
+        object_type: Bucket name, such as ``repository`` or ``pull-request``.
+        object_id: Local id of that object.
+
+    Returns:
+        The object-specific sync rule.
+    """
     return RateLimitRule(
         key=(
             f"{RATE_LIMIT_KEY_PREFIX}:sync:user:{user_id}:"
@@ -138,6 +196,15 @@ async def limit_repository_sync(
     request: Request,
     current_user: User = Depends(get_current_user),
 ) -> None:
+    """Limit how often one user can sync their repository list.
+
+    Args:
+        request: Incoming sync request.
+        current_user: Authenticated user.
+
+    Returns:
+        None when the request is allowed.
+    """
     await _enforce(request, (_sync_user_rule(current_user.id),))
 
 
@@ -146,6 +213,16 @@ async def limit_pull_request_sync(
     request: Request,
     current_user: User = Depends(get_current_user),
 ) -> None:
+    """Limit pull-request sync for one user and one repository.
+
+    Args:
+        repository_id: Local repository id.
+        request: Incoming sync request.
+        current_user: Authenticated user.
+
+    Returns:
+        None when the request is allowed.
+    """
     await _enforce(
         request,
         (
@@ -164,6 +241,16 @@ async def limit_file_sync(
     request: Request,
     current_user: User = Depends(get_current_user),
 ) -> None:
+    """Limit file sync for one user and one pull request.
+
+    Args:
+        pull_request_id: Local pull request id.
+        request: Incoming sync request.
+        current_user: Authenticated user.
+
+    Returns:
+        None when the request is allowed.
+    """
     await _enforce(
         request,
         (
@@ -182,6 +269,16 @@ async def limit_review_creation(
     request: Request,
     current_user: User = Depends(get_current_user),
 ) -> None:
+    """Limit review-job creation for one user and one pull request.
+
+    Args:
+        pull_request_id: Local pull request id.
+        request: Incoming create request.
+        current_user: Authenticated user.
+
+    Returns:
+        None when the request is allowed.
+    """
     await _enforce(
         request,
         (

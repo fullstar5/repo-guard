@@ -30,6 +30,12 @@ settings = get_settings()
     dependencies=[Depends(limit_oauth_requests)],
 )
 async def github_login() -> RedirectResponse:
+    """Start GitHub OAuth by redirecting the browser to GitHub.
+
+    Returns:
+        A 302 redirect to GitHub's authorize URL. Sets a short-lived httpOnly
+        state cookie used to check the callback.
+    """
     state = token_urlsafe(32)
     authorize_url = build_github_authorize_url(state)
 
@@ -56,6 +62,20 @@ async def github_callback(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
+    """Finish GitHub OAuth and set the session cookie.
+
+    Args:
+        code: Authorization code from GitHub.
+        state: State query value that must match the login cookie.
+        request: Incoming request, used for the state cookie and HTTP client.
+        db: Request-scoped async session.
+
+    Returns:
+        A 302 redirect to the frontend with the access-token cookie set.
+
+    Raises:
+        HTTPException: 400 when the OAuth state does not match.
+    """
     saved_state = request.cookies.get(settings.oauth_state_cookie_name)
     if not saved_state or saved_state != state:
         raise HTTPException(
@@ -95,12 +115,25 @@ async def github_callback(
 
 @router.get("/me", response_model=AuthUserRead)
 async def get_me(current_user: User = Depends(get_current_user)):
+    """Return the authenticated user.
+
+    Args:
+        current_user: User resolved from the session cookie or Bearer token.
+
+    Returns:
+        Public fields for that user.
+    """
     return AuthUserRead.model_validate(current_user)
 
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout():
+    """Clear the session cookie.
+
+    Returns:
+        204 with the access-token cookie deleted.
+    """
     response = Response(status_code=status.HTTP_204_NO_CONTENT)
     # Cookie deletion must match the attributes used in set_cookie,
     # otherwise browsers keep the httpOnly session cookie.

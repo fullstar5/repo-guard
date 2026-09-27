@@ -44,7 +44,16 @@ async def get_pull_request_for_user(
     pull_request_id: int,
     user_id: int,
 ) -> PullRequest | None:
-    """Return a pull request only when it belongs to the current user scope."""
+    """Return a pull request only when it belongs to the user.
+
+    Args:
+        db: Open async session.
+        pull_request_id: Local pull request id.
+        user_id: Local user id.
+
+    Returns:
+        The pull request, or None when it is missing or owned by someone else.
+    """
     result = await db.execute(
         select(PullRequest)
         .join(Repository, PullRequest.repository_id == Repository.id)
@@ -61,7 +70,15 @@ async def get_pull_request_files(
     db: AsyncSession,
     pull_request_id: int,
 ) -> list[PRFile]:
-    """Load synced PR files used as review input."""
+    """Load synced files used as review input.
+
+    Args:
+        db: Open async session.
+        pull_request_id: Local pull request id.
+
+    Returns:
+        File rows for that pull request. Ownership is checked by the caller.
+    """
     result = await db.execute(
         select(PRFile).where(PRFile.pull_request_id == pull_request_id)
     )
@@ -74,7 +91,17 @@ async def get_review_job_with_findings_for_user(
     review_job_id: int,
     user_id: int,
 ) -> ReviewJob | None:
-    """Load one review job with nested findings, scoped to the current user."""
+    """Load one review job and its findings when the user owns it.
+
+    Args:
+        db: Open async session.
+        review_job_id: Local review job id.
+        user_id: Local user id.
+
+    Returns:
+        The job with findings loaded, or None when it is missing or owned
+        by someone else.
+    """
     result = await db.execute(
         select(ReviewJob)
         .join(PullRequest, ReviewJob.pull_request_id == PullRequest.id)
@@ -93,7 +120,15 @@ def _apply_file_path_fallback(
     findings: list[ReviewFindingDraft],
     fallback_file_path: str,
 ) -> list[ReviewFindingDraft]:
-    """only use in chunk mode, fill the file path for any empty file path in AI response"""
+    """Fill a missing file path with the pack's only filename.
+
+    Args:
+        findings: Findings parsed from one pack.
+        fallback_file_path: Path used when a finding has no ``file_path``.
+
+    Returns:
+        Copies of the findings, with empty paths replaced.
+    """
     return [
         finding if finding.file_path else finding.model_copy(update={"file_path": fallback_file_path}) for finding in findings
     ]
@@ -101,7 +136,14 @@ def _apply_file_path_fallback(
 
 
 def _dedup_findings(findings: list[ReviewFindingDraft]) -> list[ReviewFindingDraft]:
-    """remove duplicate findings"""
+    """Drop findings that repeat the same path, lines, summary, and suggestion.
+
+    Args:
+        findings: Findings collected from every pack.
+
+    Returns:
+        The first copy of each distinct finding, in original order.
+    """
     dedup: list[ReviewFindingDraft] = []
     seen: set[tuple[str, int | None, int | None, str, str]] = set()
 
@@ -125,8 +167,13 @@ def _dedup_findings(findings: list[ReviewFindingDraft]) -> list[ReviewFindingDra
 
 
 def _format_review_job_error(exc: BaseException) -> str:
-    """
-    Never return empty string error to database,
+    """Turn an exception into a non-empty message for ``error_message``.
+
+    Args:
+        exc: Failure from a model call or the worker wrapper.
+
+    Returns:
+        The exception text, or a fallback sentence when that text is empty.
     """
     if isinstance(exc, TimeoutError):
         message = str(exc).strip()
@@ -151,7 +198,22 @@ async def _review_content_with_retries(
     request_label: str,
     attempt_count: int = 3,
 ) -> ReviewResult:
-    """Retry one OpenRouter call. Timeouts are not retried here."""
+    """Call the model for one payload, retrying empty content, 5xx, and 429.
+
+    Args:
+        provider: OpenRouter client for this job's model.
+        content: User message for this pack.
+        request_label: Log label, usually the pack index and filenames.
+        attempt_count: Maximum attempts, including the first call.
+
+    Returns:
+        The parsed review.
+
+    Raises:
+        TimeoutError: The read timed out. Timeouts are not retried.
+        SoftTimeLimitExceeded: The Celery soft limit fired. It is re-raised.
+        Exception: The last retryable failure, or a non-retryable error.
+    """
     last_exc: Exception | None = None
 
     for attempt in range(1, attempt_count + 1):
@@ -200,7 +262,17 @@ async def replace_review_findings(
     pr_files: list[PRFile],
     findings: list[ReviewFindingDraft],
 ) -> None:
-    """Replace all findings for one review job."""
+    """Replace all findings stored for one review job.
+
+    Args:
+        db: Open async session. This function flushes and does not commit.
+        review_job: Job whose previous findings are deleted.
+        pr_files: Files used to attach ``pr_file_id`` from ``file_path``.
+        findings: Draft findings to store after de-duplication.
+
+    Returns:
+        None.
+    """
     await db.execute(
         delete(ReviewFinding).where(ReviewFinding.review_job_id == review_job.id)
     )
@@ -228,7 +300,17 @@ async def create_review_job(
     provider: str,
     model_name: str,
 ) -> ReviewJob:
-    """Create a review job after counting files."""
+    """Insert a pending review job.
+
+    Args:
+        db: Open async session. This function commits.
+        pull_request: Pull request being reviewed.
+        provider: Review provider name, currently ``openrouter``.
+        model_name: Model id stored on the job and later read by the worker.
+
+    Returns:
+        The committed job. ``total_chunks`` is 0 until execution finishes.
+    """
     pr_files = await get_pull_request_files(db, pull_request.id)
     review_job = ReviewJob(
         pull_request_id=pull_request.id,
@@ -253,8 +335,20 @@ async def create_review_job_if_no_active(
     provider: str,
     model_name: str,
 ) -> tuple[ReviewJob, bool]:
-    """
-    return existing active job or create new one
+    """Return the active job for a pull request, or create one.
+
+    Args:
+        db: Open async session.
+        pull_request: Pull request to lock and check.
+        provider: Provider stored on a newly created job.
+        model_name: Model stored on a newly created job.
+
+    Returns:
+        The job and True when this call created it. False means an existing
+        pending or processing job was reused.
+
+    Raises:
+        ValueError: The pull request row disappeared before the lock.
     """
 
     locked_pull_request_result = await db.execute(
@@ -304,7 +398,23 @@ async def execute_review_job(
     review_job: ReviewJob,
     http_client: httpx.AsyncClient,
 ) -> ReviewJob:
-    """Run a review job synchronously using the configured online provider."""
+    """Pack the pull request and write the review result.
+
+    The session is committed before the model calls. Success is written on a
+    new session. A failed pack is recorded and the remaining packs continue.
+
+    Args:
+        db: Session used to read the job and files, then committed.
+        review_job: Pending or processing job to run.
+        http_client: Client used for GitHub file text and OpenRouter.
+
+    Returns:
+        The job after it is completed or marked failed.
+
+    Raises:
+        SoftTimeLimitExceeded: Re-raised so the Celery wrapper can retry once.
+        ValueError: The pull request or job row is missing, or every pack failed.
+    """
     job_id = review_job.id
     pr_files = await get_pull_request_files(db, review_job.pull_request_id)
     logger.info(
@@ -464,7 +574,15 @@ async def execute_review_job(
 
 
 async def execute_review_job_by_id(review_job_id: int) -> ReviewJob | None:
-    """Load one review job in a fresh async session (rabbitMQ and celery) and execute it."""
+    """Open a new session and run one queued review job.
+
+    Args:
+        review_job_id: Local review job id from the Celery message.
+
+    Returns:
+        The job after execution, the unchanged terminal job when it is already
+        completed or failed, or None when the row does not exist.
+    """
     async with AsyncSessionLocal() as db:
         review_job = await db.get(ReviewJob, review_job_id)
         if review_job is None:
@@ -501,7 +619,16 @@ async def list_review_jobs_for_pull_request_for_user(
     pull_request_id: int,
     user_id: int,
 ) -> list[ReviewJob]:
-    """list review jobs for one pull request, scoped to the current user"""
+    """List review jobs for one pull request owned by the user.
+
+    Args:
+        db: Open async session.
+        pull_request_id: Local pull request id.
+        user_id: Local user id.
+
+    Returns:
+        Jobs with findings loaded, newest first.
+    """
     res = await db.execute(
         select(ReviewJob).join(PullRequest, ReviewJob.pull_request_id == PullRequest.id)
         .join(Repository, PullRequest.repository_id == Repository.id)
@@ -520,7 +647,15 @@ async def mark_review_job_failed_by_id(
     review_job_id: int,
     error_message: str,
 ) -> ReviewJob | None:
-    """Mark review job as failed (exceed time limit, out of retriesetc)"""
+    """Mark one review job failed on a fresh session.
+
+    Args:
+        review_job_id: Local review job id.
+        error_message: Text stored on the job. Blank text is replaced.
+
+    Returns:
+        The failed job, or None when the row does not exist.
+    """
     async with AsyncSessionLocal() as db:
         review_job = await db.get(ReviewJob, review_job_id)
         if review_job is None:
@@ -542,7 +677,15 @@ async def mark_review_job_failed_by_id(
 async def mark_abandoned_jobs_as_failed(
     older_than_seconds: int | None = None,
 ) -> int:
-    """Mark abandoned job as failed. Call by celery"""
+    """Mark processing jobs failed when they have not been updated in time.
+
+    Args:
+        older_than_seconds: Age threshold. None uses the configured stale
+        processing threshold.
+
+    Returns:
+        How many jobs were marked failed.
+    """
     threshold = older_than_seconds or settings.review_job_stale_processing_seconds
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=threshold)
 

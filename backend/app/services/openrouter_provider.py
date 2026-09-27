@@ -24,7 +24,17 @@ SEVERITY_ALIASES = {
 
 
 def _extract_json_text(raw_text: str) -> str:
-    """extract real json content from AI API response"""
+    """Take the JSON object or array out of a model reply.
+
+    Args:
+        raw_text: Model message, possibly wrapped in markdown fences or prose.
+
+    Returns:
+        The first JSON object or array substring.
+
+    Raises:
+        ValueError: No JSON value can be decoded.
+    """
     text = raw_text.strip()
     fenced_match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
 
@@ -46,7 +56,14 @@ def _extract_json_text(raw_text: str) -> str:
 
 
 def _coerce_int(value: object) -> int | None:
-    """type converage, eg. "10" -> 10"""
+    """Turn a model field into an int.
+
+    Args:
+        value: A number, numeric string, null, or some other JSON value.
+
+    Returns:
+        The integer, or None for null, blanks, booleans, and non-numeric values.
+    """
     if value is None or value == "":
         return None
     if isinstance(value, bool):
@@ -60,7 +77,14 @@ def _coerce_int(value: object) -> int | None:
 
 
 def _normalize_severity(value: object) -> str:
-    """Label mapping, eg. warning -> low"""
+    """Map a model severity label onto low, medium, high, or critical.
+
+    Args:
+        value: Severity from the model, such as ``warning`` or ``blocker``.
+
+    Returns:
+        A canonical severity. Unknown or missing values become ``medium``.
+    """
     if value is None:
         return "medium"
     normalized = str(value).strip().lower()
@@ -72,10 +96,31 @@ class OpenRouterReviewProvider(ReviewProvider):
     """Call an online review model through OpenRouter."""
 
     def __init__(self, http_client: httpx.AsyncClient, model_name: str) -> None:
+        """Store the client and model used for later review calls.
+
+        Args:
+            http_client: Async HTTP client. The caller owns its timeout.
+            model_name: OpenRouter model id sent on each request.
+
+        Returns:
+            None.
+        """
         self.http_client = http_client
         self.model_name = model_name
 
     async def review_content(self, content: str) -> ReviewResult:
+        """Send one pack to OpenRouter and parse the JSON reply.
+
+        Args:
+            content: User message for this pack. Earlier packs are not included.
+
+        Returns:
+            Parsed summary and findings.
+
+        Raises:
+            ValueError: The model returned empty content or unusable JSON.
+            httpx.HTTPStatusError: OpenRouter returned a non-2xx response.
+        """
         # Keep the prompt small and focused so free models can respond reliably.
         response = await self.http_client.post(
             f"{settings.open_router_base_url}/chat/completions",
@@ -150,6 +195,18 @@ class OpenRouterReviewProvider(ReviewProvider):
 
 
     def _parse_review_response(self, raw_content: str) -> ReviewResult:
+        """Parse a model message into a summary and findings.
+
+        Args:
+            raw_content: Raw assistant message.
+
+        Returns:
+            A ``ReviewResult``.
+
+        Raises:
+            ValueError: The JSON is not an object, has no summary, or
+            ``findings`` is not a list.
+        """
         json_text = _extract_json_text(raw_content)
         payload = json.loads(json_text)
 
@@ -170,6 +227,17 @@ class OpenRouterReviewProvider(ReviewProvider):
 
 
     def _parse_finding(self, item: object) -> ReviewFindingDraft:
+        """Parse one finding object from the model.
+
+        Args:
+            item: One element of the model's ``findings`` array.
+
+        Returns:
+            A draft finding with normalized severity and line numbers.
+
+        Raises:
+            ValueError: ``item`` is not an object or has no summary.
+        """
         if not isinstance(item, dict):
             raise ValueError("Each finding must be a JSON object.")
 

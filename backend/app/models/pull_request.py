@@ -1,10 +1,21 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint, func  # pyright: ignore[reportMissingImports]
-from sqlalchemy.orm import Mapped, mapped_column, relationship  # pyright: ignore[reportMissingImports]
-
 from app.models.base import Base
-
+from sqlalchemy import (  # pyright: ignore[reportMissingImports]
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.orm import (  # pyright: ignore[reportMissingImports]
+    Mapped,
+    mapped_column,
+    relationship,
+)
 
 
 class PullRequest(Base):
@@ -18,7 +29,7 @@ class PullRequest(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    repository_id: Mapped[int] = mapped_column(ForeignKey("repositories.id"), nullable=False, index=True)
+    repository_id: Mapped[int] = mapped_column(ForeignKey("repositories.id", ondelete="CASCADE"), nullable=False, index=True)
 
     github_pr_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     number: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -34,6 +45,7 @@ class PullRequest(Base):
     github_updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     github_closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     github_merged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

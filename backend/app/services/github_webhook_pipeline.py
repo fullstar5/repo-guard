@@ -31,7 +31,18 @@ async def _sync_and_review_for_repo(
     repository: Repository,
     github_pr: dict,
 ) -> None:
-    """sync + create_review_job + Celery review task for one local repo"""
+    """Sync one pull request and enqueue review for one local repository.
+
+    Args:
+        db: Open async session.
+        http_client: HTTP client used for GitHub file and pull-request calls.
+        repository: Local repository whose owner token is used.
+        github_pr: ``pull_request`` object from the webhook payload.
+
+    Returns:
+        None. Logs and returns when the owner has no token or enqueue fails
+        after the job is marked failed.
+    """
     owner = repository.user
     if owner is None or not owner.github_access_token:
         logger.warning(
@@ -112,9 +123,14 @@ async def _sync_and_review_for_repo(
 
 
 async def process_github_pull_request_event(payload: dict) -> None:
-    """
-    run after HTTP webhook has already returned 2xx.
-    Maps github repo id -> local owner token, then existing pipeline
+    """Run the webhook pipeline after the HTTP handler has already returned.
+
+    Args:
+        payload: Verified ``pull_request`` event body.
+
+    Returns:
+        None. Skips the event when the repository is not stored locally or
+        the payload has no repository id or pull request number.
     """
 
     repo_payload = payload.get("repository") or {}

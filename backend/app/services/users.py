@@ -11,6 +11,17 @@ async def upsert_github_user(
     token_data: GitHubAccessTokenResponse,
     email: str | None,
 ) -> User:
+    """Insert or update the local user for a GitHub account.
+
+    Args:
+        db: Open async session.
+        github_user: Profile from ``GET /user``.
+        token_data: OAuth token response, including scope.
+        email: Verified primary email, or None when GitHub did not provide one.
+
+    Returns:
+        The committed user row.
+    """
     result = await db.execute(
         select(User).where(User.github_id == github_user.id)
     )
