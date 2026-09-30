@@ -1,8 +1,8 @@
 # 测试与本地命令
 
-[返回 README](../README.md)
+[返回 README](../README.md) · [进度报告](progress.md)
 
-自动化测试不连 GitHub、OpenRouter、Postgres 或 Redis。后端用 `unittest.mock` 和 `httpx.MockTransport`；前端用 Vitest 与 Testing Library，跑在 jsdom 里，没有浏览器 E2E。下面是仓库里已经存在的用例，含这次补上的套件和原先就有的套件。compose、curl 以及生产环境手工检查仍在文末，它们不是自动化用例。
+自动化测试不连 GitHub、OpenRouter、Postgres 或 Redis。后端用 `unittest.mock` 和 `httpx.MockTransport`；前端用 Vitest 与 Testing Library，跑在 jsdom 里，没有浏览器 E2E。下面是仓库里已经存在的用例。做到哪一步、还缺什么，写在 [进度报告](progress.md)。compose、curl 以及生产环境手工检查仍在文末，它们不是自动化用例。
 
 ## Backend tests
 
