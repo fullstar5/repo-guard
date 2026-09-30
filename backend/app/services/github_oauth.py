@@ -15,6 +15,14 @@ GITHUB_API_HEADERS = {
 
 
 def build_github_authorize_url(state: str) -> str:
+    """Build the GitHub OAuth authorize URL.
+
+    Args:
+        state: Random value stored in the login cookie and checked on callback.
+
+    Returns:
+        The full ``https://github.com/login/oauth/authorize`` URL.
+    """
     params = {
         "client_id": settings.github_client_id,
         "redirect_uri": settings.github_redirect_uri,
@@ -28,6 +36,19 @@ async def exchange_code_for_access_token(
     http_client: httpx.AsyncClient,
     code: str,
 ) -> GitHubAccessTokenResponse:
+    """Exchange an OAuth code for a GitHub access token.
+
+    Args:
+        http_client: Shared async HTTP client.
+        code: Authorization code from the callback query string.
+
+    Returns:
+        The token payload, including scope.
+
+    Raises:
+        HTTPException: 400 when GitHub returns an OAuth error body.
+        httpx.HTTPStatusError: The token endpoint returned a non-2xx status.
+    """
     response = await http_client.post(
         "https://github.com/login/oauth/access_token",
         headers={"Accept": "application/json"},
@@ -55,6 +76,15 @@ async def fetch_github_user(
     http_client: httpx.AsyncClient,
     access_token: str,
 ) -> GitHubUserProfile:
+    """Load the GitHub profile for an access token.
+
+    Args:
+        http_client: Shared async HTTP client.
+        access_token: GitHub OAuth token.
+
+    Returns:
+        The validated ``GET /user`` profile.
+    """
     response = await http_client.get(
         "https://api.github.com/user",
         headers={
@@ -70,6 +100,16 @@ async def fetch_primary_email(
     http_client: httpx.AsyncClient,
     access_token: str,
 ) -> str | None:
+    """Load a verified email address for the GitHub user.
+
+    Args:
+        http_client: Shared async HTTP client.
+        access_token: GitHub OAuth token.
+
+    Returns:
+        The primary verified email, otherwise any verified email.
+        None when the token cannot read emails or none are verified.
+    """
     response = await http_client.get(
         "https://api.github.com/user/emails",
         headers={

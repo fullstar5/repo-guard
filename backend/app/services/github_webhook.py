@@ -18,7 +18,16 @@ def verify_github_signature(
     body: bytes,
     signature_header: str | None,
 ) -> bool:
-    """Compare X-Hub signature 256 with HMAC SHA 256 of the raw body"""
+    """Compare ``X-Hub-Signature-256`` with the HMAC-SHA256 of the raw body.
+
+    Args:
+        secret: Webhook secret configured on the GitHub App.
+        body: Raw request body. Do not re-serialize JSON before hashing.
+        signature_header: Header value, expected to start with ``sha256=``.
+
+    Returns:
+        True when the signature matches. False when it is missing or wrong.
+    """
     if not secret or not signature_header or not signature_header.startswith("sha256="):
         return False
 
@@ -37,7 +46,17 @@ def verify_github_signature(
 
 
 def parse_github_payload(body: bytes) -> dict:
-    """Decode json after signature check."""
+    """Decode a webhook body after the signature check.
+
+    Args:
+        body: Raw request body.
+
+    Returns:
+        The JSON object.
+
+    Raises:
+        ValueError: The body is not UTF-8 JSON or the JSON value is not an object.
+    """
     try:
         payload = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -55,7 +74,17 @@ def summarize_github_event(
     delivery_id: str | None,
     payload: dict,
 ) -> dict:
-    """Pull log-friendly fields. Does not sync or create jobs."""
+    """Pull log fields from a webhook payload. Does not sync or create jobs.
+
+    Args:
+        event_name: ``X-GitHub-Event`` header.
+        delivery_id: ``X-GitHub-Delivery`` header.
+        payload: Parsed webhook body.
+
+    Returns:
+        Delivery id, event, action, whether this app handles it, GitHub repo
+        id, repository full name, and pull request number.
+    """
     repository = payload.get("repository") or {}
     pull_request = payload.get("pull_request") or {}
     action = payload.get("action")
@@ -78,6 +107,14 @@ def summarize_github_event(
 def log_github_webhook_event(
     summary: dict,
 ) -> None:
+    """Write one log line for a summarized webhook delivery.
+
+    Args:
+        summary: Fields returned by ``summarize_github_event``.
+
+    Returns:
+        None.
+    """
     if summary["event"] == "ping":
         logger.info("GitHub webhook ping delivery_id=%s", summary["delivery_id"])
         return

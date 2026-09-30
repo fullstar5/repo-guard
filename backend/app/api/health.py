@@ -14,6 +14,11 @@ logger = logging.getLogger(__name__)
 
 
 async def check_postgres() -> dict:
+    """Run ``SELECT 1`` against PostgreSQL.
+
+    Returns:
+        ``{"status": "ok"}`` when the query returns 1, otherwise ``{"status": "error"}``.
+    """
     async with engine.connect() as conn:
         result = await conn.execute(text("SELECT 1"))
         is_ok = result.scalar() == 1
@@ -22,6 +27,15 @@ async def check_postgres() -> dict:
 
 
 async def check_redis(http_client: httpx.AsyncClient) -> dict:
+    """Ping Upstash Redis over its REST API.
+
+    Args:
+        http_client: Shared async HTTP client.
+
+    Returns:
+        ``{"status": "ok"}`` when Upstash answers ``PONG``, otherwise
+        ``{"status": "error"}``.
+    """
     response = await http_client.post(
         settings.upstash_redis_rest_url,
         headers={
@@ -39,17 +53,27 @@ async def check_redis(http_client: httpx.AsyncClient) -> dict:
 
 @router.get("/health/live")
 async def liveness_check():
-    """Confirm that the API process is running without calling dependencies."""
+    """Confirm that the API process is running without calling dependencies.
+
+    Returns:
+        ``{"status": "ok"}``.
+    """
     return {"status": "ok"}
 
 
 async def _readiness_response(request: Request) -> JSONResponse:
-    """
-    Report whether the API can serve database-backed requests.
+    """Report whether the API can serve database-backed requests.
 
     PostgreSQL is required and controls the HTTP status. Redis protects selected
     write paths, which fail closed independently; its outage is reported as
     degraded without restarting an otherwise healthy API process.
+
+    Args:
+        request: Incoming request; its app state holds the HTTP client.
+
+    Returns:
+        JSON with overall status and per-service status. 503 when Postgres
+        fails, 200 with ``degraded`` when only Redis fails.
     """
     services: dict[str, dict[str, str]] = {}
     postgres_ready = True
@@ -91,5 +115,12 @@ async def _readiness_response(request: Request) -> JSONResponse:
 
 @router.get("/health/ready")
 async def readiness_check(request: Request):
-    """Expose dependency readiness for deployment probes."""
+    """Expose dependency readiness for deployment probes.
+
+    Args:
+        request: Incoming request, forwarded to the readiness check.
+
+    Returns:
+        The readiness JSON response.
+    """
     return await _readiness_response(request)

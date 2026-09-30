@@ -26,5 +26,12 @@ class ReviewResult(BaseModel):
 class ReviewProvider(ABC):
     @abstractmethod
     async def review_content(self, content: str) -> ReviewResult:
-        """Review one prepared input payload and return model output."""
+        """Review one prepared input payload.
+
+        Args:
+            content: User message for a single pack. No earlier packs are included.
+
+        Returns:
+            Parsed summary and findings.
+        """
         raise NotImplementedError

@@ -34,9 +34,21 @@ async def github_webhook(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    verify and register a github delivery, then dispatch supported events
-    AI events and github sync remain outside HTTP request
+    """Verify a GitHub delivery, record it, and enqueue supported events.
+
+    Sync and review run in the worker. This handler returns as soon as the
+    message is published.
+
+    Args:
+        request: Raw webhook request. The body is verified before it is parsed.
+        db: Request-scoped async session.
+
+    Returns:
+        Whether the delivery was accepted, was a duplicate, and was dispatched.
+
+    Raises:
+        HTTPException: 401 for a bad signature, 400 for an invalid body or a
+        handled event with no delivery id, 503 when the broker publish fails.
     """
     body = await request.body()
     signature = request.headers.get("X-Hub-Signature-256")

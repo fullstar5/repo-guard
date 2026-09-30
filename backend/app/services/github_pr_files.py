@@ -19,6 +19,18 @@ async def fetch_github_pull_request_files(
     repo_name: str,
     pull_number: int,
 ) -> list[dict]:
+    """Load the changed files GitHub lists for one pull request.
+
+    Args:
+        http_client: Shared async HTTP client.
+        access_token: Repository owner's GitHub token.
+        owner_login: GitHub owner login.
+        repo_name: Repository name, without the owner.
+        pull_number: GitHub pull request number.
+
+    Returns:
+        File objects from the first page of the GitHub files API, at most 100.
+    """
     response = await http_client.get(
         f"https://api.github.com/repos/{owner_login}/{repo_name}/pulls/{pull_number}/files",
         headers={
@@ -39,6 +51,17 @@ async def sync_pull_request_files(
     pull_request: PullRequest,
     github_files: list[dict],
 ) -> list[PRFile]:
+    """Insert or update changed files for one pull request.
+
+    Args:
+        db: Open async session. This function commits.
+        pull_request: Local pull request these files belong to.
+        github_files: File objects from the GitHub files API.
+
+    Returns:
+        The file rows written by this call. Files GitHub no longer lists are
+        left in place.
+    """
     synced_items: list[PRFile] = []
 
     for file in github_files:
@@ -92,7 +115,17 @@ async def get_pull_request_with_repository(
     pull_request_id: int,
     user_id: int
 ) -> tuple[PullRequest | None, Repository | None]:
-    """search repo and pr at same time"""
+    """Load a pull request and its repository when both belong to the user.
+
+    Args:
+        db: Open async session.
+        pull_request_id: Local pull request id.
+        user_id: Local user id.
+
+    Returns:
+        The pull request and repository, or ``(None, None)`` when the user
+        does not own that pull request.
+    """
     result = await db.execute(
         select(PullRequest, Repository).join(Repository, PullRequest.repository_id == Repository.id).where(
             PullRequest.id == pull_request_id,
@@ -113,6 +146,15 @@ async def list_PR_files(
     db: AsyncSession,
     pull_request_id: int,
 ) -> list[PRFile]:
+    """List stored files for one pull request.
+
+    Args:
+        db: Open async session.
+        pull_request_id: Local pull request id. The caller checks ownership.
+
+    Returns:
+        File rows ordered by filename.
+    """
     result = await db.execute(
         select(PRFile)
         .where(PRFile.pull_request_id == pull_request_id)
@@ -127,6 +169,17 @@ async def get_PR_file_for_user(
     file_id: int,
     user_id: int,
 ) -> PRFile | None:
+    """Load one file when it belongs to the user's pull request.
+
+    Args:
+        db: Open async session.
+        pull_request_id: Local pull request id.
+        file_id: Local file id.
+        user_id: Local user id.
+
+    Returns:
+        The file row, or None when it is missing or owned by someone else.
+    """
     result = await db.execute(
         select(PRFile)
         .join(PullRequest, PRFile.pull_request_id == PullRequest.id)
@@ -141,7 +194,15 @@ async def get_PR_file_for_user(
 
 
 def _text_from_github_file_response(response: httpx.Response) -> str:
-    """Decode Contents/blob bodies. Raw text, or JSON with base64 content."""
+    """Decode a GitHub Contents or blob response into file text.
+
+    Args:
+        response: Successful GitHub response. May be raw text or JSON with
+        base64 ``content``.
+
+    Returns:
+        Decoded text. Invalid JSON is returned as a UTF-8 replacement string.
+    """
     content_type = (response.headers.get("content-type") or "").lower()
     raw = response.content or b""
     if not raw:
@@ -174,7 +235,19 @@ async def fetch_github_file_text(
     repo_name: str | None = None,
     blob_sha: str | None = None,
 ) -> str | None:
-    """Load the file blob GitHub stored on the PR (head version)."""
+    """Load the file text GitHub stored on the pull request head.
+
+    Args:
+        http_client: Shared async HTTP client.
+        access_token: Repository owner's GitHub token.
+        contents_url: Contents API URL stored on the file row.
+        owner_login: Repository owner, used for the blob fallback.
+        repo_name: Repository name, used for the blob fallback.
+        blob_sha: Blob sha, used when Contents returns 403 or 404.
+
+    Returns:
+        File text, or None when neither URL can be read.
+    """
     headers = {
         "Accept": "application/vnd.github.raw",
         "Authorization": f"Bearer {access_token}",

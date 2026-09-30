@@ -15,9 +15,19 @@ async def register_github_webhook_event(
     github_repo_id: int | None,
     pull_request_number: int | None,
 ) -> bool:
-    """
-    service that register github webhook event atomically, avoid concurrent duplicates
-    Return False means delivery has been accepted
+    """Record one GitHub delivery if it has not been accepted before.
+
+    Args:
+        db: Open async session. This function commits.
+        delivery_id: ``X-GitHub-Delivery`` value.
+        event_name: ``X-GitHub-Event`` value.
+        action: Payload action, such as ``opened`` or ``synchronize``.
+        github_repo_id: GitHub repository id, when present.
+        pull_request_number: Pull request number, when present.
+
+    Returns:
+        True when this call inserted the delivery. False when that delivery
+        id was already stored.
     """
 
     statement = (
@@ -44,8 +54,14 @@ async def delete_github_webhook_event(
     db: AsyncSession,
     delivery_id: str,
 ) -> None:
-    """
-    service that remove github webhook when rabbitmq publish failed, so github can retry 
+    """Delete a delivery record so GitHub can retry after a broker failure.
+
+    Args:
+        db: Open async session. This function commits.
+        delivery_id: ``X-GitHub-Delivery`` value to remove.
+
+    Returns:
+        None.
     """
     await db.execute(
         delete(GitHubWebhookEvent).where(GitHubWebhookEvent.delivery_id == delivery_id)

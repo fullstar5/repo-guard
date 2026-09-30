@@ -17,6 +17,14 @@ from app.core.config import get_settings
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Create the shared HTTP client on startup and close it on shutdown.
+
+    Args:
+        app: The FastAPI application. ``app.state.http_client`` is set here.
+
+    Returns:
+        None. Control returns to FastAPI while the process is serving.
+    """
     app.state.http_client = httpx.AsyncClient(timeout=5.0)
     yield
     await app.state.http_client.aclose()
@@ -48,4 +56,9 @@ app.include_router(webhooks_router)
 
 @app.get("/")
 async def read_root():
+    """Confirm the API process is responding.
+
+    Returns:
+        A static message. Does not check the database or Redis.
+    """
     return {"message": "Repo Guard AI backend is running"}

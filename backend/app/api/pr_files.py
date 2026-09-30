@@ -36,7 +36,21 @@ async def sync_pull_request_files_endpoint(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """sync PR files for single PR"""
+    """Fetch changed files from GitHub and store them for one pull request.
+
+    Args:
+        pull_request_id: Local pull request id.
+        request: Incoming request; its app state holds the HTTP client.
+        current_user: Authenticated owner of the repository.
+        db: Request-scoped async session.
+
+    Returns:
+        The file rows written by this sync, including patches and count.
+
+    Raises:
+        HTTPException: 400 without a GitHub token, 404 when the pull request
+        is not owned by the current user.
+    """
     if not current_user.github_access_token:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -83,7 +97,19 @@ async def list_PR_files_endpoint(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """endpoint that list all PR files for single PR"""
+    """List changed files stored for one pull request.
+
+    Args:
+        pull_request_id: Local pull request id.
+        current_user: Authenticated user. The pull request must belong to them.
+        db: Request-scoped async session.
+
+    Returns:
+        File list items without requiring a new GitHub call.
+
+    Raises:
+        HTTPException: 404 when the pull request is not owned by the current user.
+    """
     pull_request, repository = await get_pull_request_with_repository(
         db=db,
         pull_request_id=pull_request_id,
@@ -113,7 +139,20 @@ async def get_PR_file(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return one synced file including its patch, scoped to the current user."""
+    """Return one synced file, including its patch.
+
+    Args:
+        pull_request_id: Local pull request id.
+        file_id: Local pull-request file id.
+        current_user: Authenticated user. The file must belong to them.
+        db: Request-scoped async session.
+
+    Returns:
+        The file row, including patch text.
+
+    Raises:
+        HTTPException: 404 when the file is missing or belongs to another user.
+    """
     pr_file = await get_PR_file_for_user(
         db=db,
         pull_request_id=pull_request_id,
@@ -134,8 +173,20 @@ async def get_pull_request(
     pull_request_id: int,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-): 
-    """return single PR based on PR id"""
+):
+    """Return one stored pull request.
+
+    Args:
+        pull_request_id: Local pull request id.
+        current_user: Authenticated user. The pull request must belong to them.
+        db: Request-scoped async session.
+
+    Returns:
+        The pull request row.
+
+    Raises:
+        HTTPException: 404 when it is missing or belongs to another user.
+    """
     pull_request, repository = await get_pull_request_with_repository(
         db=db,
         pull_request_id=pull_request_id,

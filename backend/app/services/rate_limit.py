@@ -61,7 +61,19 @@ async def check_rate_limits(
     http_client: httpx.AsyncClient,
     rules: tuple[RateLimitRule, ...],
 ) -> RateLimitDecision:
-    """Atomically increment and evaluate one or more fixed-window buckets."""
+    """Atomically increment and evaluate one or more fixed-window buckets.
+
+    Args:
+        http_client: Shared async HTTP client.
+        rules: Buckets incremented in one Upstash ``EVAL``.
+
+    Returns:
+        Whether the request is allowed and how many seconds to wait if not.
+
+    Raises:
+        ValueError: ``rules`` is empty or a limit or window is not positive.
+        RateLimitBackendError: Upstash did not return a usable decision.
+    """
     if not rules:
         raise ValueError("At least one rate limit rule is required")
 

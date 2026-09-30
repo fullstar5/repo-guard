@@ -13,7 +13,14 @@ settings = get_settings()
 
 
 def create_access_token(user_id: int) -> str:
-    """Create a signed JWT for the authenticated user."""
+    """Create a signed JWT for the authenticated user.
+
+    Args:
+        user_id: Local user id stored in the ``sub`` claim.
+
+    Returns:
+        The encoded JWT string.
+    """
     expire_at = datetime.now(timezone.utc) + timedelta(
         minutes=settings.access_token_expire_minutes
     )
@@ -31,7 +38,17 @@ def create_access_token(user_id: int) -> str:
 
 
 def decode_access_token(token: str) -> dict:
-    """Decode and verify JWT, raising 401 when invalid."""
+    """Decode and verify a JWT.
+
+    Args:
+        token: Encoded access token from the cookie or Authorization header.
+
+    Returns:
+        The JWT payload.
+
+    Raises:
+        HTTPException: 401 when the token is invalid or expired.
+    """
     try:
         return jwt.decode(
             token,

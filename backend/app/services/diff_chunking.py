@@ -4,7 +4,6 @@ from pathlib import PurePosixPath
 
 from app.models.pr_file import PRFile
 
-
 # Paths GitHub never needs an LLM to read. Matched against POSIX paths
 # from the GitHub files API (always forward slashes).
 IGNORED_FILENAMES = frozenset(
@@ -34,6 +33,7 @@ IGNORED_DIR_NAMES = frozenset(
         ".next",
         "coverage",
         "vendor",
+        "docs",
     }
 )
 IGNORED_SUFFIXES = (
@@ -69,7 +69,7 @@ HUNK_HEADER = re.compile(
 
 # Leave headroom in each pack for the OpenRouter system prompt, JSON schema,
 # and model reply. Characters are only an approximation of tokens.
-PACK_CONTENT_BUDGET_RATIO = 0.6
+PACK_CONTENT_BUDGET_RATIO = 0.8
 
 
 @dataclass
@@ -80,15 +80,39 @@ class ReviewPack:
 
 
 def pack_content_budget(max_chars: int, reserved: int = 0) -> int:
-    """Usable character budget after prompt/response headroom."""
+    """Usable character budget after prompt and reply headroom.
+
+    Args:
+        max_chars: Configured pack size before the budget ratio.
+        reserved: Characters already used by a fixed prefix, such as the intro.
+
+    Returns:
+        How many characters of window text may still go into the pack.
+        At least 1.
+    """
     return max(int(max_chars * PACK_CONTENT_BUDGET_RATIO) - reserved, 1)
 
 
 def filter_reviewable_files(pr_files: list[PRFile]) -> list[PRFile]:
-    """filter out files that not suppose to be reviewed"""
+    """Drop lockfiles, generated files, images, and other paths the model should skip.
+
+    Args:
+        pr_files: Synced files for one pull request.
+
+    Returns:
+        Files whose paths are not on the ignore list. Order is preserved.
+    """
 
     def is_ignored_review_path(filename: str | None) -> bool:
-        """Return True when this path should not be sent to the review model."""
+        """Return whether a path should be left out of review.
+
+        Args:
+            filename: GitHub path using forward slashes, or None.
+
+        Returns:
+            True for empty names, ignored filenames, ignored directories,
+            and ignored suffixes.
+        """
         if not filename or not filename.strip():
             return True
 
@@ -99,10 +123,7 @@ def filter_reviewable_files(pr_files: list[PRFile]) -> list[PRFile]:
             return True
         if any(part in IGNORED_DIR_NAMES for part in parts_lower):
             return True
-        if any(name_lower.endswith(suffix) for suffix in IGNORED_SUFFIXES):
-            return True
-
-        return False
+        return bool(any(name_lower.endswith(suffix) for suffix in IGNORED_SUFFIXES))
 
     return [
         pr_file
@@ -112,7 +133,15 @@ def filter_reviewable_files(pr_files: list[PRFile]) -> list[PRFile]:
 
 
 def parse_new_file_hunk_ranges(patch: str | None) -> list[tuple[int, int]]:
-    """Inclusive 1-based line ranges in the new file, from @@ headers."""
+    """Read inclusive 1-based line ranges in the new file from ``@@`` headers.
+
+    Args:
+        patch: GitHub unified diff, or None.
+
+    Returns:
+        ``(start, end)`` pairs. An empty list means there was no patch or no
+        usable hunk header.
+    """
     if not patch:
         return []
     ranges: list[tuple[int, int]] = []
@@ -138,7 +167,16 @@ def merge_line_windows(
     context_lines: int,
     line_count: int,
 ) -> list[tuple[int, int]]:
-    """Expand each hunk by context and merge overlaps so one function stays together."""
+    """Expand each hunk by context and merge ranges that overlap or touch.
+
+    Args:
+        ranges: Inclusive 1-based hunk ranges.
+        context_lines: Lines added before and after each hunk.
+        line_count: Number of lines in the new file. Ranges are clipped to it.
+
+    Returns:
+        Merged inclusive ranges, in file order.
+    """
     expanded: list[tuple[int, int]] = []
     for start, end in ranges:
         left = max(1, start - context_lines)
@@ -156,7 +194,17 @@ def merge_line_windows(
 
 
 def render_window(filename: str, lines: list[str], start: int, end: int) -> str:
-    """Slice inclusive 1-based lines and keep numbers in the prompt."""
+    """Render one source window with line numbers.
+
+    Args:
+        filename: Path shown to the model.
+        lines: Full file split into lines, without trailing newlines.
+        start: Inclusive 1-based first line.
+        end: Inclusive 1-based last line.
+
+    Returns:
+        Prompt text for that window.
+    """
     body = []
     for number in range(start, end + 1):
         text = lines[number - 1] if number <= len(lines) else ""
@@ -178,7 +226,18 @@ def render_line_fragment(
     part: int,
     parts: int,
 ) -> str:
-    """Render one oversized source line, split across packs if needed."""
+    """Render one piece of a source line that does not fit in a pack.
+
+    Args:
+        filename: Path shown to the model.
+        line_no: 1-based line number.
+        text: The piece of that line included in this fragment.
+        part: 1-based index of this piece.
+        parts: How many pieces the line was split into.
+
+    Returns:
+        Prompt text for that piece.
+    """
     suffix = f" (line split {part}/{parts})" if parts > 1 else ""
     return (
         f"File: {filename}\n"
@@ -194,7 +253,17 @@ def split_oversized_line(
     text: str,
     budget: int,
 ) -> list[str]:
-    """Split one source line that does not fit the pack budget. Never drop it."""
+    """Split one source line that does not fit the pack budget. Never drop it.
+
+    Args:
+        filename: Path shown to the model.
+        line_no: 1-based line number.
+        text: Full line text.
+        budget: Maximum characters for one rendered fragment.
+
+    Returns:
+        One or more rendered fragments covering the whole line.
+    """
     overhead = len(render_line_fragment(filename, line_no, "", part=1, parts=1))
     piece_budget = max(budget - overhead, 64)
     if not text:
@@ -220,18 +289,29 @@ def build_file_windows(
     context_lines: int,
     max_chars: int,
 ) -> list[str]:
-    """
-    Every reviewable change in this file becomes one or more windows.
-    Remainder goes to the next window/pack. Nothing from this file is dropped.
+    """Turn one file's changes into review windows.
+
+    Remainder goes to the next window. Nothing from this file is dropped.
+
+    Args:
+        filename: Path shown to the model.
+        status: GitHub file status, such as ``modified`` or ``removed``.
+        patch: Unified diff, or None.
+        source_text: PR-head file text, or None when it could not be fetched.
+        context_lines: Lines of source kept around each hunk.
+        max_chars: Pack size used to compute the window budget.
+
+    Returns:
+        Rendered windows in file order.
     """
     budget = pack_content_budget(max_chars)
 
     if status == "removed" or not source_text:
         if not patch:
             return [
-                f"File: {filename}\n"
+                (f"File: {filename}\n"
                 "The file has no patch and the source could not be fetched. "
-                "Note this as a review gap for this file.\n"
+                "Note this as a review gap for this file.\n")
             ]
         hunks = split_patch_by_hunks(patch, budget)
         if not hunks:
@@ -287,10 +367,17 @@ def pack_review_windows(
     *,
     max_chars: int,
 ) -> list[ReviewPack]:
-    """
-    windows: (filename, window_text). Greedy packs with no call cap.
+    """Greedily pack windows into model requests. There is no call cap.
+
     A window that does not fit the current pack starts the next pack.
     Windows are never discarded.
+
+    Args:
+        windows: ``(filename, window_text)`` pairs in review order.
+        max_chars: Pack size used to compute the content budget.
+
+    Returns:
+        Packs whose ``content`` is ready to send as one user message.
     """
     intro = (
         "Review the following pull request changes.\n"
@@ -304,6 +391,11 @@ def pack_review_windows(
     current_len = 0
 
     def flush() -> None:
+        """Append the current windows as one pack and clear the buffer.
+
+        Returns:
+            None.
+        """
         nonlocal current_parts, current_names, current_len
         if not current_parts:
             return
@@ -331,7 +423,16 @@ def pack_review_windows(
 
 
 def split_patch_by_hunks(patch: str, max_chars: int = 4000) -> list[str]:
-    """Split a GitHub patch into chunks, preferring hunk boundaries."""
+    """Split a GitHub patch into chunks, preferring hunk boundaries.
+
+    Args:
+        patch: Unified diff.
+        max_chars: Maximum characters in one chunk. A longer hunk is split
+        by line.
+
+    Returns:
+        Diff chunks in file order. Empty when ``patch`` is empty.
+    """
     if not patch:
         return []
 

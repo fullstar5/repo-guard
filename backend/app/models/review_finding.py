@@ -1,11 +1,21 @@
 from datetime import datetime
 from enum import Enum as PyEnum
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text, func  # pyright: ignore[reportMissingImports]
-from sqlalchemy.orm import Mapped, mapped_column, relationship  # pyright: ignore[reportMissingImports]
-
 from app.models.base import Base
-
+from sqlalchemy import (  # pyright: ignore[reportMissingImports]
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    func,
+)
+from sqlalchemy.orm import (  # pyright: ignore[reportMissingImports]
+    Mapped,
+    mapped_column,
+    relationship,
+)
 
 
 class ReviewFindingSeverity(str, PyEnum):
@@ -21,13 +31,13 @@ class ReviewFinding(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
 
     review_job_id: Mapped[int] = mapped_column(
-        ForeignKey("review_jobs.id"),
+        ForeignKey("review_jobs.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
 
     pr_file_id: Mapped[int | None] = mapped_column(
-        ForeignKey("pull_request_files.id"),
+        ForeignKey("pull_request_files.id", ondelete="CASCADE"),
         nullable=True,
         index=True,
     )
@@ -57,4 +67,3 @@ class ReviewFinding(Base):
 
     review_job = relationship("ReviewJob", back_populates="findings")
     pr_file = relationship("PRFile")
-

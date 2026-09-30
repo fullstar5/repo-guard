@@ -52,7 +52,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: celery -A app.core.celery_app:celery_app worker -l INFO --concurrency=1 --without-gossip --without-mingle --without-heartbeat
+    command: celery -A app.core.celery_app:celery_app worker -l INFO --concurrency=2 --without-gossip --without-mingle --without-heartbeat
     init: true
     logging: *default-logging
     env_file:

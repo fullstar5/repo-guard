@@ -26,6 +26,7 @@ import {
 } from "@/lib/review-findings";
 import { authMeQueryOptions } from "@/lib/auth-session";
 import { isActiveJob } from "@/lib/job-status";
+import { reviewModelLabel } from "@/lib/review-models";
 import {
   parsePrTab,
   prClearJobPinHref,
@@ -40,6 +41,7 @@ import {
   getPullRequest,
   listPullRequestFiles,
   listReviewJobs,
+  listReviewModels,
   syncPullRequestFiles,
 } from "@/lib/api";
 
@@ -81,9 +83,19 @@ export default function PullRequestReviewPage() {
   const historicalPin = isHistoricalJobPin(jobIdParam);
   const requestedTab = parsePrTab(searchParams.get("tab"));
   const [lastOpenedJobId, setLastOpenedJobId] = useState<number | undefined>();
+  const [modelName, setModelName] = useState("openrouter/free");
 
   const meQuery = useQuery(authMeQueryOptions);
   const { repository } = useRepository(repositoryId);
+  const modelsQuery = useQuery({
+    queryKey: ["review-models"],
+    queryFn: listReviewModels,
+    enabled: meQuery.isSuccess,
+  });
+  const modelOptions = modelsQuery.data?.models ?? ["openrouter/free"];
+  const defaultModel = modelsQuery.data?.default_model ?? modelOptions[0];
+  // CHANGED: pick a valid option while rendering. Do not setState inside an effect.
+  const selectedModel = modelOptions.includes(modelName) ? modelName : defaultModel;
 
   const prQuery = useQuery({
     queryKey: ["pull-requests", pullRequestId],
@@ -119,7 +131,7 @@ export default function PullRequestReviewPage() {
   });
 
   const createJobMutation = useMutation({
-    mutationFn: () => createReviewJob(pullRequestId),
+    mutationFn: () => createReviewJob(pullRequestId, selectedModel),
     onSuccess: () => {
       void queryClient.invalidateQueries({
         queryKey: ["pull-requests", pullRequestId, "review-jobs"],
@@ -201,7 +213,23 @@ export default function PullRequestReviewPage() {
             </div>
           ) : null}
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-2 text-sm text-[#a1a1aa]">
+            <span className="sr-only">Review model</span>
+            <select
+              value={selectedModel}
+              onChange={(event) => setModelName(event.target.value)}
+              disabled={runDisabled}
+              aria-label="Review model"
+              className="h-9 max-w-[14rem] rounded-md border border-[#3f3f46] bg-[#18181b] px-2 text-sm text-[#fafafa] outline-none focus-visible:ring-2 focus-visible:ring-[#22d3ee]/70 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {modelOptions.map((model) => (
+                <option key={model} value={model}>
+                  {reviewModelLabel(model)}
+                </option>
+              ))}
+            </select>
+          </label>
           {prQuery.data ? (
             <Button variant="outline" asChild>
               <a href={prQuery.data.html_url} target="_blank" rel="noreferrer">
@@ -294,7 +322,7 @@ export default function PullRequestReviewPage() {
               hint={
                 fileCount === 0
                   ? "Sync files, then run an AI review."
-                  : "Run AI review with the workspace default model."
+                  : "Choose a model, then run an AI review."
               }
             />
           )}

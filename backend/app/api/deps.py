@@ -19,6 +19,11 @@ oauth2_scheme = OAuth2PasswordBearer(
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    """Yield one async database session for the current request.
+
+    Returns:
+        An open ``AsyncSession`` that is closed when the request ends.
+    """
     async with AsyncSessionLocal() as session:
         yield session
 
@@ -27,6 +32,18 @@ def _extract_access_token(
     request: Request,
     bearer_token: str | None,
 ) -> str:
+    """Read the access token from the Authorization header or the session cookie.
+
+    Args:
+        request: Incoming request, used to read the httpOnly cookie.
+        bearer_token: Token parsed by the OAuth2 scheme, if the header is present.
+
+    Returns:
+        The raw JWT string.
+
+    Raises:
+        HTTPException: 401 when neither source has a token.
+    """
     if bearer_token:
         return bearer_token
 
@@ -45,7 +62,19 @@ async def get_current_user(
     bearer_token: str | None = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    """Resolve the current user from Bearer token or httpOnly cookie."""
+    """Resolve the current user from a Bearer token or the httpOnly cookie.
+
+    Args:
+        request: Incoming request.
+        bearer_token: Optional Authorization header token.
+        db: Request-scoped async session.
+
+    Returns:
+        The ``User`` row named by the token ``sub`` claim.
+
+    Raises:
+        HTTPException: 401 when the token or user is missing or invalid.
+    """
     token = _extract_access_token(request, bearer_token)
     payload = decode_access_token(token)
     user_id = payload.get("sub")

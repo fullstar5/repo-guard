@@ -1,10 +1,20 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func  # pyright: ignore[reportMissingImports]
-from sqlalchemy.orm import Mapped, mapped_column, relationship  # pyright: ignore[reportMissingImports]
-
 from app.models.base import Base
-
+from sqlalchemy import (  # pyright: ignore[reportMissingImports]
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.orm import (  # pyright: ignore[reportMissingImports]
+    Mapped,
+    mapped_column,
+    relationship,
+)
 
 
 class PRFile(Base):
@@ -19,7 +29,7 @@ class PRFile(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     pull_request_id: Mapped[int] = mapped_column(
-        ForeignKey("pull_requests.id"),
+        ForeignKey("pull_requests.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )

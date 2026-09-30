@@ -1,6 +1,7 @@
 from datetime import datetime
 from enum import Enum as PyEnum
 
+from app.models.base import Base
 from sqlalchemy import (  # pyright: ignore[reportMissingImports]
     DateTime,
     Enum,
@@ -12,11 +13,11 @@ from sqlalchemy import (  # pyright: ignore[reportMissingImports]
     func,
     text,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship  # pyright: ignore[reportMissingImports]
-
-from app.models.base import Base
-
-
+from sqlalchemy.orm import (  # pyright: ignore[reportMissingImports]
+    Mapped,
+    mapped_column,
+    relationship,
+)
 
 
 class ReviewJobStatus(str, PyEnum):
@@ -24,6 +25,7 @@ class ReviewJobStatus(str, PyEnum):
     processing = "processing"
     completed = "completed"
     failed = "failed"
+    partial = "partial"
 
 
 class ReviewJob(Base):
@@ -35,15 +37,13 @@ class ReviewJob(Base):
             "uq_review_jobs_active_pull_request",
             "pull_request_id",
             unique=True,
-            postgresql_where=text(
-                "status IN ('pending', 'processing')"
-            ),
+            postgresql_where=text("status IN ('pending', 'processing')"),
         ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     pull_request_id: Mapped[int] = mapped_column(
-        ForeignKey("pull_requests.id"),
+        ForeignKey("pull_requests.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )

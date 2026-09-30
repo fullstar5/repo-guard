@@ -16,6 +16,7 @@ import { JobStatusChip } from "@/components/status-badges";
 import type { ReviewJob } from "@/lib/api";
 import { formatDuration, formatRelativeTime } from "@/lib/format";
 import { isActiveJob, isTerminalJob, toJobUiStatus } from "@/lib/job-status";
+import { reviewModelLabel } from "@/lib/review-models";
 import { cn } from "@/lib/utils";
 
 export function ReviewJobsTable({
@@ -46,6 +47,7 @@ export function ReviewJobsTable({
           <LeanTableRow>
             <LeanTableHead>ID</LeanTableHead>
             <LeanTableHead>Status</LeanTableHead>
+            <LeanTableHead>Model</LeanTableHead>
             <LeanTableHead>Findings</LeanTableHead>
             <LeanTableHead>Duration</LeanTableHead>
             <LeanTableHead>Updated</LeanTableHead>
@@ -72,6 +74,11 @@ export function ReviewJobsTable({
                 </LeanTableCell>
                 <LeanTableCell>
                   <JobStatusChip status={job.status} />
+                </LeanTableCell>
+                <LeanTableCell className="max-w-[10rem] text-[#a1a1aa]">
+                  <span className="block truncate" title={job.model_name}>
+                    {reviewModelLabel(job.model_name)}
+                  </span>
                 </LeanTableCell>
                 <LeanTableCell className="tabular-nums text-[#a1a1aa]">
                   {isActiveJob(job) ? "—" : job.findings.length}
