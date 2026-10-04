@@ -69,7 +69,7 @@ HUNK_HEADER = re.compile(
 
 # Leave headroom in each pack for the OpenRouter system prompt, JSON schema,
 # and model reply. Characters are only an approximation of tokens.
-PACK_CONTENT_BUDGET_RATIO = 0.8
+PACK_CONTENT_BUDGET_RATIO = 0.9
 
 
 @dataclass
