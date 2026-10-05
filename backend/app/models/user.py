@@ -1,10 +1,18 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, String, func, Text  # pyright: ignore[reportMissingImports]
-from sqlalchemy.orm import Mapped, mapped_column, relationship  # pyright: ignore[reportMissingImports]
-
 from app.models.base import Base
-
+from sqlalchemy import (  # pyright: ignore[reportMissingImports]
+    BigInteger,
+    DateTime,
+    String,
+    Text,
+    func,
+)
+from sqlalchemy.orm import (  # pyright: ignore[reportMissingImports]
+    Mapped,
+    mapped_column,
+    relationship,
+)
 
 
 class User(Base):
@@ -17,7 +25,16 @@ class User(Base):
 
     # token
     github_access_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    github_refresh_token: Mapped[str | None] = mapped_column(Text, nullable=True)
     github_token_scope: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    github_access_token_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    github_refresh_token_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

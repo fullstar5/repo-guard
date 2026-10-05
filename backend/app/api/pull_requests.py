@@ -9,6 +9,10 @@ from app.services.github_pull_requests import (
     list_PRs_for_repo,
     sync_pull_requests,
 )
+from app.services.github_tokens import (
+    GitHubTokenUnavailable,
+    call_with_github_token,
+)
 from fastapi import (  # pyright: ignore[reportMissingImports]
     APIRouter,
     Depends,
@@ -44,15 +48,9 @@ async def sync_repo_pr(
         Pull requests still stored for this repository after the sync, including count.
 
     Raises:
-        HTTPException: 400 without a GitHub token, 404 when the repo is not
-        owned by the current user.
+        HTTPException: 401 when GitHub authorization must be renewed, or 404
+        when the repo is not owned by the current user.
     """
-    if not current_user.github_access_token:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User has no GitHub access token",
-        )
-
     repository = await get_repo_for_user(
         db=db,
         repository_id=repository_id,
@@ -66,12 +64,22 @@ async def sync_repo_pr(
         )
 
     http_client: httpx.AsyncClient = request.app.state.http_client
-    github_pull_requests = await fetch_github_pull_requests(
-        http_client=http_client,
-        access_token=current_user.github_access_token,
-        owner_login=repository.owner_login,
-        repo_name=repository.name,
-    )
+    try:
+        github_pull_requests = await call_with_github_token(
+            current_user.id,
+            http_client,
+            lambda token: fetch_github_pull_requests(
+                http_client=http_client,
+                access_token=token,
+                owner_login=repository.owner_login,
+                repo_name=repository.name,
+            ),
+        )
+    except GitHubTokenUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+        ) from exc
 
     pull_requests = await sync_pull_requests(
         db=db,

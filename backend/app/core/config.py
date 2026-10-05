@@ -4,7 +4,10 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 from pydantic import model_validator  # pyright: ignore[reportMissingImports]
-from pydantic_settings import BaseSettings, SettingsConfigDict  # pyright: ignore[reportMissingImports]
+from pydantic_settings import (  # pyright: ignore[reportMissingImports]
+    BaseSettings,
+    SettingsConfigDict,
+)
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 

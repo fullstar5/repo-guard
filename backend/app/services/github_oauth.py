@@ -1,10 +1,9 @@
 from urllib.parse import urlencode
 
 import httpx  # pyright: ignore[reportMissingImports]
-from fastapi import HTTPException, status  # pyright: ignore[reportMissingImports]
-
 from app.core.config import get_settings
 from app.schemas.auth import GitHubAccessTokenResponse, GitHubEmail, GitHubUserProfile
+from fastapi import HTTPException, status  # pyright: ignore[reportMissingImports]
 
 settings = get_settings()
 
@@ -12,6 +11,10 @@ GITHUB_API_HEADERS = {
     "Accept": "application/vnd.github+json",
     "X-GitHub-Api-Version": "2026-03-10",
 }
+
+
+class GitHubTokenRefreshError(RuntimeError):
+    """GitHub rejected a stored refresh token."""
 
 
 def build_github_authorize_url(state: str) -> str:
@@ -67,6 +70,47 @@ async def exchange_code_for_access_token(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=payload.get("error_description", payload["error"]),
+        )
+
+    return GitHubAccessTokenResponse.model_validate(payload)
+
+
+async def refresh_github_access_token(
+    http_client: httpx.AsyncClient,
+    refresh_token: str,
+) -> GitHubAccessTokenResponse:
+    """Exchange a rotating GitHub refresh token for a new token pair.
+
+    Args:
+        http_client: Async client used for the OAuth request.
+        refresh_token: Refresh token currently stored for the user.
+
+    Returns:
+        GitHub's new access token and rotated refresh token.
+
+    Raises:
+        GitHubTokenRefreshError: GitHub rejected or malformed the refresh.
+        httpx.HTTPError: The token endpoint could not be reached.
+    """
+    response = await http_client.post(
+        "https://github.com/login/oauth/access_token",
+        headers={"Accept": "application/json"},
+        data={
+            "client_id": settings.github_client_id,
+            "client_secret": settings.github_client_secret,
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+        },
+        timeout=15.0,
+    )
+    response.raise_for_status()
+    payload = response.json()
+
+    if "error" in payload or "access_token" not in payload:
+        raise GitHubTokenRefreshError(
+            payload.get("error_description")
+            or payload.get("error")
+            or "GitHub returned an invalid token refresh response"
         )
 
     return GitHubAccessTokenResponse.model_validate(payload)

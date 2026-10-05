@@ -1,7 +1,4 @@
 import httpx  # pyright: ignore[reportMissingImports]
-from fastapi import APIRouter, Depends, HTTPException, Request, status  # pyright: ignore[reportMissingImports]
-from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
-
 from app.api.deps import get_current_user, get_db
 from app.api.rate_limit_deps import limit_repository_sync
 from app.models.user import User
@@ -11,7 +8,18 @@ from app.services.github_repositories import (
     list_repos_for_user,
     sync_repositories,
 )
-
+from app.services.github_tokens import (
+    GitHubTokenUnavailable,
+    call_with_github_token,
+)
+from fastapi import (  # pyright: ignore[reportMissingImports]
+    APIRouter,
+    Depends,
+    HTTPException,
+    Request,
+    status,
+)
+from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 
 router = APIRouter(prefix="/repositories", tags=["repositories"])
 
@@ -38,19 +46,21 @@ async def sync_user_repositories(
         Repositories remaining after sync, including count.
 
     Raises:
-        HTTPException: 400 when the user has no GitHub token.
+        HTTPException: 401 when GitHub authorization must be renewed.
     """
-    if not current_user.github_access_token:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User has no Github access token",
-        )
-
     http_client: httpx.AsyncClient = request.app.state.http_client
-    github_repositories = await fetch_github_repositories(
-        http_client,
-        current_user.github_access_token,
-    )
+    try:
+        github_repositories = await call_with_github_token(
+            current_user.id,
+            http_client,
+            lambda token: fetch_github_repositories(http_client, token),
+        )
+    except GitHubTokenUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+        ) from exc
+
     repositories = await sync_repositories(db, current_user, github_repositories)
 
     return RepositorySyncResponse(

@@ -2,10 +2,8 @@
 
 
 import logging
+
 import httpx  # pyright: ignore[reportMissingImports]
-
-from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
-
 from app.core.config import get_settings
 from app.core.database import AsyncSessionLocal
 from app.models.repository import Repository
@@ -16,10 +14,13 @@ from app.services.github_pr_files import (
 )
 from app.services.github_pull_requests import sync_pull_requests
 from app.services.github_repositories import list_repo_by_github_repo_id
+from app.services.github_tokens import (
+    GitHubTokenUnavailable,
+    call_with_github_token,
+)
 from app.services.review_jobs import create_review_job_if_no_active
 from app.tasks.review_jobs import execute_review_job_task
-
-
+from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -44,9 +45,9 @@ async def _sync_and_review_for_repo(
         after the job is marked failed.
     """
     owner = repository.user
-    if owner is None or not owner.github_access_token:
+    if owner is None:
         logger.warning(
-            "Skip webhook review local_repo_id=%s: owner has no GitHub token",
+            "Skip webhook review local_repo_id=%s: owner is missing",
             repository.id,
         )
         return
@@ -68,13 +69,27 @@ async def _sync_and_review_for_repo(
         )
         return
 
-    github_files = await fetch_github_pull_request_files(
-        http_client=http_client,
-        access_token=owner.github_access_token,
-        owner_login=repository.owner_login,
-        repo_name=repository.name,
-        pull_number=pull_request.number,
-    ) 
+    try:
+        github_files = await call_with_github_token(
+            owner.id,
+            http_client,
+            lambda token: fetch_github_pull_request_files(
+                http_client=http_client,
+                access_token=token,
+                owner_login=repository.owner_login,
+                repo_name=repository.name,
+                pull_number=pull_request.number,
+            ),
+        )
+    except GitHubTokenUnavailable:
+        logger.warning(
+            "Skip webhook review local_repo_id=%s pr_number=%s: "
+            "GitHub authorization must be renewed",
+            repository.id,
+            pull_request.number,
+        )
+        return
+
     await sync_pull_request_files(
         db=db,
         pull_request=pull_request,

@@ -1,9 +1,13 @@
-import httpx  # pyright: ignore[reportMissingImports]
-import re
 import json
+import re
 
+import httpx  # pyright: ignore[reportMissingImports]
 from app.core.config import get_settings
-from app.services.review_provider import ReviewProvider, ReviewFindingDraft, ReviewResult
+from app.services.review_provider import (
+    ReviewFindingDraft,
+    ReviewProvider,
+    ReviewResult,
+)
 
 settings = get_settings()
 
@@ -211,7 +215,7 @@ class OpenRouterReviewProvider(ReviewProvider):
         payload = json.loads(json_text)
 
         if not isinstance(payload, dict):
-            raise ValueError("Model response must be a JSON object")
+            raise TypeError("Model response must be a JSON object")
         
         summary = str(payload.get("summary", "")).strip()
         raw_findings = payload.get("findings", [])
@@ -220,7 +224,7 @@ class OpenRouterReviewProvider(ReviewProvider):
             raise ValueError("Model responses is missing summary")
 
         if not isinstance(raw_findings, list):
-            raise ValueError("Model ressponse field 'findings' must be a list")
+            raise TypeError("Model ressponse field 'findings' must be a list")
 
         findings = [self._parse_finding(item) for item in raw_findings]
         return ReviewResult(summary=summary, findings=findings)
@@ -239,7 +243,7 @@ class OpenRouterReviewProvider(ReviewProvider):
             ValueError: ``item`` is not an object or has no summary.
         """
         if not isinstance(item, dict):
-            raise ValueError("Each finding must be a JSON object.")
+            raise TypeError("Each finding must be a JSON object.")
 
         summary = str(item.get("summary", "")).strip()
         if not summary:
