@@ -1,8 +1,46 @@
+from datetime import datetime, timedelta, timezone
+
+from app.models.user import User
+from app.schemas.auth import GitHubAccessTokenResponse, GitHubUserProfile
 from sqlalchemy import select  # pyright: ignore[reportMissingImports]
 from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 
-from app.models.user import User
-from app.schemas.auth import GitHubUserProfile, GitHubAccessTokenResponse
+
+def apply_github_token(
+    user: User,
+    token_data: GitHubAccessTokenResponse,
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Store a GitHub user-token response and its expiration timestamps.
+
+    GitHub rotates refresh tokens. A refresh response must therefore replace
+    both tokens atomically on the same user row.
+
+    Args:
+        user: User row to update.
+        token_data: OAuth authorization-code or refresh response.
+        now: UTC clock used to calculate absolute expiration timestamps.
+
+    Returns:
+        None.
+    """
+    current = now or datetime.now(timezone.utc)
+    user.github_access_token = token_data.access_token
+    user.github_token_scope = token_data.scope or None
+    user.github_access_token_expires_at = (
+        current + timedelta(seconds=token_data.expires_in)
+        if token_data.expires_in is not None
+        else None
+    )
+
+    if token_data.refresh_token:
+        user.github_refresh_token = token_data.refresh_token
+        user.github_refresh_token_expires_at = (
+            current + timedelta(seconds=token_data.refresh_token_expires_in)
+            if token_data.refresh_token_expires_in is not None
+            else None
+        )
 
 
 async def upsert_github_user(
@@ -34,16 +72,14 @@ async def upsert_github_user(
             github_id=github_user.id,
             github_login=github_user.login,
             email=resolved_email,
-            github_access_token=token_data.access_token,
-            github_token_scope=token_data.scope,
         )
         db.add(user)
 
     else:
         user.github_login = github_user.login
         user.email = resolved_email
-        user.github_access_token = token_data.access_token
-        user.github_token_scope = token_data.scope
+
+    apply_github_token(user, token_data)
 
     await db.commit()
     await db.refresh(user)

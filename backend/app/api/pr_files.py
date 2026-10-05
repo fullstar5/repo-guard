@@ -1,10 +1,6 @@
 import httpx  # pyright: ignore[reportMissingImports]
-from fastapi import APIRouter, Depends, HTTPException, Request, status  # pyright: ignore[reportMissingImports]
-from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
-
 from app.api.deps import get_current_user, get_db
 from app.api.rate_limit_deps import limit_file_sync
-from app.schemas.pull_request import PullRequestRead
 from app.models.user import User
 from app.schemas.pr_file import (
     PullRequestFileListItem,
@@ -12,6 +8,7 @@ from app.schemas.pr_file import (
     PullRequestFileRead,
     PullRequestFileSyncResponse,
 )
+from app.schemas.pull_request import PullRequestRead
 from app.services.github_pr_files import (
     fetch_github_pull_request_files,
     get_PR_file_for_user,
@@ -19,8 +16,18 @@ from app.services.github_pr_files import (
     list_PR_files,
     sync_pull_request_files,
 )
-
-
+from app.services.github_tokens import (
+    GitHubTokenUnavailable,
+    call_with_github_token,
+)
+from fastapi import (  # pyright: ignore[reportMissingImports]
+    APIRouter,
+    Depends,
+    HTTPException,
+    Request,
+    status,
+)
+from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 
 router = APIRouter(prefix="/pull-requests", tags=["pull-request-files"])
 
@@ -48,15 +55,9 @@ async def sync_pull_request_files_endpoint(
         The file rows written by this sync, including patches and count.
 
     Raises:
-        HTTPException: 400 without a GitHub token, 404 when the pull request
-        is not owned by the current user.
+        HTTPException: 401 when GitHub authorization must be renewed, or 404
+        when the pull request is not owned by the current user.
     """
-    if not current_user.github_access_token:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User has no GitHub access token",
-        )
-
     pull_request, repository = await get_pull_request_with_repository(
         db=db,
         pull_request_id=pull_request_id,
@@ -70,13 +71,23 @@ async def sync_pull_request_files_endpoint(
         )
 
     http_client: httpx.AsyncClient = request.app.state.http_client
-    github_files = await fetch_github_pull_request_files(
-        http_client=http_client,
-        access_token=current_user.github_access_token,
-        owner_login=repository.owner_login,
-        repo_name=repository.name,
-        pull_number=pull_request.number,
-    )
+    try:
+        github_files = await call_with_github_token(
+            current_user.id,
+            http_client,
+            lambda token: fetch_github_pull_request_files(
+                http_client=http_client,
+                access_token=token,
+                owner_login=repository.owner_login,
+                repo_name=repository.name,
+                pull_number=pull_request.number,
+            ),
+        )
+    except GitHubTokenUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+        ) from exc
 
     pr_files = await sync_pull_request_files(
         db=db,

@@ -1,11 +1,13 @@
 from pydantic import BaseModel, ConfigDict  # pyright: ignore[reportMissingImports]
 
 
-
 class GitHubAccessTokenResponse(BaseModel):
     access_token: str
     token_type: str
-    scope: str
+    scope: str = ""
+    expires_in: int | None = None
+    refresh_token: str | None = None
+    refresh_token_expires_in: int | None = None
 
 
 class GitHubUserProfile(BaseModel):

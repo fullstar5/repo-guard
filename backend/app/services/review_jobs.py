@@ -3,17 +3,12 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 import httpx  # pyright: ignore[reportMissingImports]
-from billiard.exceptions import SoftTimeLimitExceeded  # pyright: ignore[reportMissingImports]
-
-from sqlalchemy import delete, select  # pyright: ignore[reportMissingImports]
-from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
-from sqlalchemy.orm import selectinload  # pyright: ignore[reportMissingImports]
-
 from app.core.config import get_settings
 from app.core.database import AsyncSessionLocal
 from app.models.pr_file import PRFile
 from app.models.pull_request import PullRequest
 from app.models.repository import Repository
+from app.models.review_finding import ReviewFinding, ReviewFindingSeverity
 from app.models.review_job import ReviewJob, ReviewJobStatus
 from app.services.diff_chunking import (
     build_file_windows,
@@ -21,12 +16,18 @@ from app.services.diff_chunking import (
     pack_review_windows,
 )
 from app.services.github_pr_files import fetch_github_file_text
+from app.services.github_tokens import (
+    GitHubTokenSession,
+    GitHubTokenUnavailable,
+)
 from app.services.openrouter_provider import OpenRouterReviewProvider
-from app.models.review_finding import ReviewFinding, ReviewFindingSeverity
 from app.services.review_provider import ReviewFindingDraft, ReviewResult
-
-
-
+from billiard.exceptions import (  # pyright: ignore[reportMissingImports]
+    SoftTimeLimitExceeded,  # pyright: ignore[reportMissingImports]
+)
+from sqlalchemy import delete, select  # pyright: ignore[reportMissingImports]
+from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
+from sqlalchemy.orm import selectinload  # pyright: ignore[reportMissingImports]
 
 # pull PR and PR files from database and create/execute review jobs, and store jobs and results in database 
 settings = get_settings()
@@ -433,9 +434,7 @@ async def execute_review_job(
         .where(Repository.id == pull_request.repository_id)
     )
     repository = repo_result.scalar_one()
-    access_token = (
-        repository.user.github_access_token if repository.user is not None else None
-    )
+    owner_id = repository.user.id if repository.user is not None else None
     # copy scalars so HTTP work never touches the ORM session.
     owner_login = repository.owner_login
     repo_name = repository.name
@@ -457,22 +456,38 @@ async def execute_review_job(
             model_name=model_name,
         )
 
+        github_token_session = (
+            GitHubTokenSession(owner_id, http_client)
+            if owner_id is not None
+            else None
+        )
         windows: list[tuple[str, str]] = []
         fetch_notes: list[str] = []
         for pr_file in filter_reviewable_files(pr_files):
             source_text = None
-            if pr_file.status != "removed" and access_token:
+            if pr_file.status != "removed" and github_token_session is not None:
+                contents_url = pr_file.contents_url
+                blob_sha = pr_file.sha
                 try:
-                    source_text = await fetch_github_file_text(
-                        http_client,
-                        access_token,
-                        pr_file.contents_url,
-                        owner_login=owner_login,
-                        repo_name=repo_name,
-                        blob_sha=pr_file.sha,
+                    source_text = await github_token_session.run(
+                        lambda token,
+                        contents_url=contents_url,
+                        blob_sha=blob_sha: fetch_github_file_text(
+                            http_client,
+                            token,
+                            contents_url,
+                            owner_login=owner_login,
+                            repo_name=repo_name,
+                            blob_sha=blob_sha,
+                        )
                     )
                 except SoftTimeLimitExceeded:
                     raise
+                except GitHubTokenUnavailable as exc:
+                    fetch_notes.append(
+                        f"GitHub source fetch disabled: {exc}"
+                    )
+                    github_token_session = None
                 except Exception as exc:
                     fetch_notes.append(
                         f"{pr_file.filename}: failed to fetch source ({exc})"
