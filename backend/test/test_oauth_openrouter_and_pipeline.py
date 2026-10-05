@@ -15,6 +15,7 @@ from app.services.github_oauth import (
     fetch_primary_email,
     fetch_github_user,
 )
+from app.services.github_tokens import GitHubTokenUnavailable
 from app.services.github_webhook_pipeline import process_github_pull_request_event
 from app.services.openrouter_provider import OpenRouterReviewProvider
 from app.services.users import upsert_github_user
@@ -24,6 +25,10 @@ from helpers import async_cm, scalar_result
 
 def _client(handler):
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+async def _pass_github_token(_user_id, _http_client, operation):
+    return await operation("gho")
 
 
 def test_authorize_url_includes_state_and_configured_client():
@@ -193,7 +198,7 @@ def test_openrouter_rejects_missing_summary_and_non_list_findings():
     provider = OpenRouterReviewProvider(AsyncMock(), "openrouter/free")
     with pytest.raises(ValueError, match="missing summary"):
         provider._parse_review_response('{"summary":"","findings":[]}')
-    with pytest.raises(ValueError, match="findings"):
+    with pytest.raises(TypeError, match="findings"):
         provider._parse_review_response('{"summary":"ok","findings":{}}')
     with pytest.raises(ValueError, match="summary"):
         provider._parse_finding({"severity": "high"})
@@ -240,7 +245,7 @@ def test_pipeline_skips_unknown_repo_missing_token_and_reuses_active_job():
 
     repo = SimpleNamespace(
         id=3,
-        user=SimpleNamespace(github_access_token=None),
+        user=SimpleNamespace(id=7, github_access_token=None),
         owner_login="octo",
         name="demo",
     )
@@ -257,17 +262,30 @@ def test_pipeline_skips_unknown_repo_missing_token_and_reuses_active_job():
             ),
             patch(
                 "app.services.github_webhook_pipeline.sync_pull_requests",
-                new=AsyncMock(),
+                new=AsyncMock(return_value=[SimpleNamespace(id=8, number=4)]),
             ) as sync,
+            patch(
+                "app.services.github_webhook_pipeline.call_with_github_token",
+                new=AsyncMock(side_effect=GitHubTokenUnavailable("reconnect")),
+            ),
+            patch(
+                "app.services.github_webhook_pipeline.create_review_job_if_no_active",
+                new=AsyncMock(),
+            ) as create_job,
+            patch(
+                "app.services.github_webhook_pipeline.execute_review_job_task.delay"
+            ) as delay,
         ):
             await process_github_pull_request_event(payload)
-        sync.assert_not_awaited()
+        sync.assert_awaited()
+        create_job.assert_not_awaited()
+        delay.assert_not_called()
 
     asyncio.run(_no_token())
 
     owner_repo = SimpleNamespace(
         id=3,
-        user=SimpleNamespace(github_access_token="gho"),
+        user=SimpleNamespace(id=7, github_access_token="gho"),
         owner_login="octo",
         name="demo",
     )
@@ -294,6 +312,10 @@ def test_pipeline_skips_unknown_repo_missing_token_and_reuses_active_job():
                 "app.services.github_webhook_pipeline.sync_pull_requests",
                 new=AsyncMock(return_value=[pull_request]),
             ) as sync,
+            patch(
+                "app.services.github_webhook_pipeline.call_with_github_token",
+                new=_pass_github_token,
+            ),
             patch(
                 "app.services.github_webhook_pipeline.fetch_github_pull_request_files",
                 new=AsyncMock(return_value=[{"filename": "a.py"}]),
@@ -326,7 +348,7 @@ def test_pipeline_creates_and_enqueues_a_job_per_local_repo():
     repos = [
         SimpleNamespace(
             id=1,
-            user=SimpleNamespace(github_access_token="gho"),
+            user=SimpleNamespace(id=7, github_access_token="gho"),
             owner_login="octo",
             name="demo",
         ),
@@ -361,6 +383,10 @@ def test_pipeline_creates_and_enqueues_a_job_per_local_repo():
                 new=AsyncMock(return_value=[pull_request]),
             ) as sync,
             patch(
+                "app.services.github_webhook_pipeline.call_with_github_token",
+                new=_pass_github_token,
+            ),
+            patch(
                 "app.services.github_webhook_pipeline.fetch_github_pull_request_files",
                 new=AsyncMock(return_value=[]),
             ),
@@ -391,7 +417,7 @@ def test_pipeline_enqueue_failure_marks_the_job_failed():
     }
     repo = SimpleNamespace(
         id=1,
-        user=SimpleNamespace(github_access_token="gho"),
+        user=SimpleNamespace(id=7, github_access_token="gho"),
         owner_login="octo",
         name="demo",
     )
@@ -417,6 +443,10 @@ def test_pipeline_enqueue_failure_marks_the_job_failed():
             patch(
                 "app.services.github_webhook_pipeline.sync_pull_requests",
                 new=AsyncMock(return_value=[SimpleNamespace(id=8, number=4)]),
+            ),
+            patch(
+                "app.services.github_webhook_pipeline.call_with_github_token",
+                new=_pass_github_token,
             ),
             patch(
                 "app.services.github_webhook_pipeline.fetch_github_pull_request_files",

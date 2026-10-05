@@ -6,9 +6,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import jwt  # pyright: ignore[reportMissingImports]
 import pytest  # pyright: ignore[reportMissingImports]
-from fastapi import FastAPI  # pyright: ignore[reportMissingImports]
-from fastapi.testclient import TestClient  # pyright: ignore[reportMissingImports]
-
 from app.api.auth import router as auth_router
 from app.api.deps import get_current_user, get_db
 from app.api.pr_files import router as files_router
@@ -22,10 +19,16 @@ from app.core.security import create_access_token, decode_access_token
 from app.models.review_job import ReviewJob, ReviewJobStatus
 from app.models.user import User
 from app.schemas.auth import GitHubAccessTokenResponse, GitHubUserProfile
+from app.services.github_tokens import GitHubTokenUnavailable
+from fastapi import FastAPI  # pyright: ignore[reportMissingImports]
+from fastapi.testclient import TestClient  # pyright: ignore[reportMissingImports]
 from helpers import scalar_result
 
-
 settings = get_settings()
+
+
+async def _pass_github_token(_user_id, _http_client, operation):
+    return await operation("gho_test")
 
 
 def _user(**overrides) -> User:
@@ -210,9 +213,13 @@ def test_github_callback_sets_session_cookie_and_logout_clears_it():
 
 
 def test_repository_sync_requires_token_and_returns_synced_items():
-    client = _client(repositories_router, user=_user(github_access_token=None))
-    missing = client.post("/repositories/sync")
-    assert missing.status_code == 400
+    client = _client(repositories_router, user=_user())
+    with patch(
+        "app.api.repositories.call_with_github_token",
+        new=AsyncMock(side_effect=GitHubTokenUnavailable("reconnect")),
+    ):
+        missing = client.post("/repositories/sync")
+    assert missing.status_code == 401
 
     owner = _user()
     client = _client(repositories_router, user=owner)
@@ -227,6 +234,10 @@ def test_repository_sync_requires_token_and_returns_synced_items():
     repo.updated_at = datetime(2026, 1, 2, tzinfo=timezone.utc)
 
     with (
+        patch(
+            "app.api.repositories.call_with_github_token",
+            new=_pass_github_token,
+        ),
         patch("app.api.repositories.fetch_github_repositories", new=AsyncMock(return_value=[])),
         patch("app.api.repositories.sync_repositories", new=AsyncMock(return_value=[repo])),
     ):
@@ -268,6 +279,10 @@ def test_pull_request_sync_404_for_foreign_repo_and_lists_stored_prs():
     with (
         patch("app.api.pull_requests.get_repo_for_user", new=AsyncMock(return_value=repo)),
         patch(
+            "app.api.pull_requests.call_with_github_token",
+            new=_pass_github_token,
+        ),
+        patch(
             "app.api.pull_requests.fetch_github_pull_requests",
             new=AsyncMock(return_value=[{"id": 30}]),
         ) as fetch,
@@ -285,8 +300,18 @@ def test_pull_request_sync_404_for_foreign_repo_and_lists_stored_prs():
 
 
 def test_file_sync_requires_token_and_get_file_hides_other_users():
-    client = _client(files_router, user=_user(github_access_token=None))
-    assert client.post("/pull-requests/4/files/sync").status_code == 400
+    client = _client(files_router, user=_user())
+    with (
+        patch(
+            "app.api.pr_files.get_pull_request_with_repository",
+            new=AsyncMock(return_value=(MagicMock(number=4), MagicMock())),
+        ),
+        patch(
+            "app.api.pr_files.call_with_github_token",
+            new=AsyncMock(side_effect=GitHubTokenUnavailable("reconnect")),
+        ),
+    ):
+        assert client.post("/pull-requests/4/files/sync").status_code == 401
 
     owner = _user()
     client = _client(files_router, user=owner)

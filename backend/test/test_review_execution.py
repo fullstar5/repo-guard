@@ -82,7 +82,7 @@ def _run_execute(
     read_db.get = AsyncMock(return_value=SimpleNamespace(id=10, repository_id=3))
     repo_result = MagicMock()
     repo_result.scalar_one.return_value = SimpleNamespace(
-        user=SimpleNamespace(github_access_token=token),
+        user=SimpleNamespace(id=7 if token else None, github_access_token=token),
         owner_login="octo",
         name="demo",
     )
@@ -114,6 +114,10 @@ def _run_execute(
             patch(
                 "app.services.review_jobs.fetch_github_file_text",
                 new=fetch,
+            ),
+            patch(
+                "app.services.github_tokens.get_valid_github_access_token",
+                new=AsyncMock(return_value=token or "token"),
             ),
             patch(
                 "app.services.review_jobs.OpenRouterReviewProvider",
@@ -188,7 +192,7 @@ def test_large_pr_records_pack_count_summaries_and_every_file():
     result, saved, write_db, provider, _read_db = _run_execute(
         files,
         [_finding("from a", file_path="a.py"), _finding("from b", file_path="b.py")],
-        max_chars=800,
+        max_chars=700,
     )
 
     assert saved.status == ReviewJobStatus.completed
@@ -210,7 +214,7 @@ def test_partial_pack_failure_completes_and_keeps_successful_findings():
     _result, saved, write_db, _provider, _read_db = _run_execute(
         files,
         [_finding("kept", file_path="a.py"), ValueError("model down")],
-        max_chars=800,
+        max_chars=700,
     )
 
     assert saved.status == ReviewJobStatus.completed
@@ -228,7 +232,7 @@ def test_all_packs_failing_marks_the_job_failed():
     read_db.get = AsyncMock(return_value=SimpleNamespace(id=10, repository_id=3))
     repo_result = MagicMock()
     repo_result.scalar_one.return_value = SimpleNamespace(
-        user=SimpleNamespace(github_access_token="token"),
+        user=SimpleNamespace(id=7, github_access_token="token"),
         owner_login="octo",
         name="demo",
     )
@@ -243,6 +247,10 @@ def test_all_packs_failing_marks_the_job_failed():
             patch(
                 "app.services.review_jobs.fetch_github_file_text",
                 new=AsyncMock(return_value="print(1)\n"),
+            ),
+            patch(
+                "app.services.github_tokens.get_valid_github_access_token",
+                new=AsyncMock(return_value="token"),
             ),
             patch(
                 "app.services.review_jobs.OpenRouterReviewProvider",
@@ -281,6 +289,10 @@ def test_soft_time_limit_during_execute_is_not_marked_failed():
             patch(
                 "app.services.review_jobs.fetch_github_file_text",
                 new=AsyncMock(return_value="print(1)\n"),
+            ),
+            patch(
+                "app.services.github_tokens.get_valid_github_access_token",
+                new=AsyncMock(return_value="token"),
             ),
             patch(
                 "app.services.review_jobs.OpenRouterReviewProvider",
@@ -526,7 +538,7 @@ def _ready_db(*, token: str | None = "token"):
     db.get = AsyncMock(return_value=SimpleNamespace(id=10, repository_id=3))
     repo_result = MagicMock()
     repo_result.scalar_one.return_value = SimpleNamespace(
-        user=SimpleNamespace(github_access_token=token),
+        user=SimpleNamespace(id=7 if token else None, github_access_token=token),
         owner_login="octo",
         name="demo",
     )
