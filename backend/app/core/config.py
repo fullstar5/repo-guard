@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     github_client_id: str
     github_client_secret: str
     github_redirect_uri: str
-    github_webhook_secret: str   # used to authenticate message from github
+    github_webhook_secret: str  # used to authenticate message from github
 
     frontend_url: str
     github_oauth_scope: str
@@ -43,7 +43,7 @@ class Settings(BaseSettings):
 
     open_router_api_key: str
     open_router_base_url: str = "https://openrouter.ai/api/v1"
-    open_router_default_model: str = "openrouter/free"
+    open_router_default_model: str = "nvidia/nemotron-3-ultra-550b-a55b:free"
     app_public_url: str = "http://localhost:3000"
     app_name: str = "CodeGuard AI"
 
@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     # review_max_combined_files: int = 30
     # review_max_combined_changes: int = 1000
     review_retry_attempts: int = 3
-    review_pack_max_chars: int = 102400
+    review_pack_max_chars: int = 256000
     review_context_lines: int = 40
 
     # Upstash-backed distributed rate limiting. Local development may disable
@@ -78,20 +78,20 @@ class Settings(BaseSettings):
     rate_limit_review_object_requests: int = 2
     rate_limit_review_object_window_seconds: int = 600
 
-
     # RabbitMQ and celery
     rabbitmq_url: str = "amqp://guest:guest@localhost:5672//"
     celery_result_backend: str = "rpc://"
 
     celery_task_max_retries: int = 3
-    celery_task_retry_backoff_seconds: int = 5   # wait for x second before next try
-    celery_task_retry_backoff_max: int = 300   #
-    celery_task_soft_time_limit: int = 3600   # 1h wall clock; retry the whole job once
-    celery_task_time_limit: int = 4200   # above soft so retry can enqueue and persist
+    celery_task_retry_backoff_seconds: int = 5  # wait for x second before next try
+    celery_task_retry_backoff_max: int = 300  #
+    celery_task_soft_time_limit: int = 3600  # 1h wall clock; retry the whole job once
+    celery_task_time_limit: int = 4200  # above soft so retry can enqueue and persist
 
-    celery_task_reclaim_interval_seconds: float = 21600   # scan stale jobs every 6 hours
-    review_job_stale_processing_seconds: int = 10800   # > 2h so a 1h run + 1 retry is not reclaimed
-
+    celery_task_reclaim_interval_seconds: float = 21600  # scan stale jobs every 6 hours
+    review_job_stale_processing_seconds: int = (
+        10800  # > 2h so a 1h run + 1 retry is not reclaimed
+    )
 
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",
@@ -160,9 +160,7 @@ class Settings(BaseSettings):
             errors.append("JWT_SECRET_KEY must contain at least 32 characters")
 
         if len(self.github_webhook_secret) < 32:
-            errors.append(
-                "GITHUB_WEBHOOK_SECRET must contain at least 32 characters"
-            )
+            errors.append("GITHUB_WEBHOOK_SECRET must contain at least 32 characters")
 
         database_host = urlsplit(self.neon_postgres_url).hostname
         if database_host in {"localhost", "127.0.0.1"}:
@@ -186,10 +184,14 @@ class Settings(BaseSettings):
             ``postgresql://`` or ``postgres://``. Otherwise the original URL.
         """
         if self.neon_postgres_url.startswith("postgresql://"):
-            return self.neon_postgres_url.replace("postgresql://", "postgresql+psycopg://", 1)
+            return self.neon_postgres_url.replace(
+                "postgresql://", "postgresql+psycopg://", 1
+            )
 
         if self.neon_postgres_url.startswith("postgres://"):
-            return self.neon_postgres_url.replace("postgres://", "postgresql+psycopg://", 1)
+            return self.neon_postgres_url.replace(
+                "postgres://", "postgresql+psycopg://", 1
+            )
 
         return self.neon_postgres_url
 
