@@ -7,8 +7,8 @@ CodeGuard AI 是面向开发者的 AI Code Review SaaS。浏览器里的「Run A
 | 文档 | 内容 |
 |---|---|
 | [项目简介](docs/introduction.md) | 目的、技术栈、运行步骤、重试分层、数据表 |
-| [进度报告](docs/progress.md) | 路线图、已完成范围、下一步、worker 并发决定 |
-| [测试与本地命令](docs/testing.md) | 已验证项、待补测试、compose / pytest / curl |
+| [进度报告](docs/progress.md) | 路线图、已完成范围、测试进度、下一步、worker 并发决定 |
+| [测试与本地命令](docs/testing.md) | 用例清单、compose / pytest / npm test / curl |
 
 ## 运行拓扑
 
@@ -47,4 +47,4 @@ flowchart TB
 4. 9D（暂缓）：findings 写回 GitHub PR 评论
 5. Agent 开工时再把 worker 从 Celery 迁到 Taskiq；现在不改队列
 
-细节在 [进度报告](docs/progress.md)。本地怎么跑在 [测试与本地命令](docs/testing.md)。
+细节在 [进度报告](docs/progress.md)。自动化测试当前是后端 122 个、前端 30 个；用例清单和本地命令在 [测试与本地命令](docs/testing.md)，覆盖进度在进度报告里。

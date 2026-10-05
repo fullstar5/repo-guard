@@ -8,7 +8,7 @@
 
 合入 `main` 后 GitHub Actions 推 GHCR，API / worker 跟 `:main`。改表则本地先对生产 Neon 跑迁移再合入。上线 worker 必须带上超时和 packing 环境变量，以及 `--without-gossip --without-mingle --without-heartbeat`。
 
-生产上手动 review 与 webhook Redeliver 已通。对已 sync 仓库 `git push` 后是否自动出现 review job，仍待补测。对象级 user 隔离已有，还没有自动化测试锁住。UI 仍是功能向 MVP。
+生产上手动 review 与 webhook Redeliver 已通。对已 sync 仓库 `git push` 后是否自动出现 review job，仍待补测。对象级读隔离已有自动化测试锁住。UI 仍是功能向 MVP。
 
 | 范围 | 状态 |
 |---|---|
@@ -17,15 +17,34 @@
 | Step 10A–10E | 已完成。10F 可观测性跳过。10G 是隔离的 GCP 练习，不是产品路径 |
 | Step 11A-1 / 11A-2 / 11A-4 / 11A-5 | 已落地 |
 | Step 11A-3 | 取消。单 pack 预算远小于 128k 级窗口，不再把超限响应拆成更小请求 |
-| Step 11 其余 | 安全、UI、模型质量未开始 |
+| Step 11 其余 | 安全加固、UI、模型质量未开始。打包 / review / webhook / 展示层关键路径已有自动化测试 |
+| 自动化测试 | 后端 122、前端 30。CI 跑 `pytest -q` 与 `npm test`。生产 push、浏览器登录、severity 过滤未覆盖 |
 | 模型选择 | PR 页可选白名单。Webhook 仍用 `OPEN_ROUTER_DEFAULT_MODEL` |
 | Worker 并发 | 继续 Celery prefork。Agent 开工时再迁 Taskiq |
+
+### 自动化测试
+
+状态：核心路径已有 mock 测试。不连 GitHub、OpenRouter、Postgres 或 Redis。逐条用例和本地命令在 [测试与本地命令](testing.md)。
+
+已完成：
+
+- 后端 `cd backend && pytest -q`：**122** 个，在 `backend/test/`。覆盖打包与窗口、GitHub 文件正文、仓库和 PR 的 `Link` 分页、同步落库、review 执行（小 PR、大 PR、部分 pack 失败仍 `completed`、全部失败、去重与 `file_path`）、任务重试与 reclaim、OAuth / JWT、webhook 幂等和自动 review 流水线、HTTP sync / review、非属主 404 与查询绑定 `user_id`、限流、健康检查、OpenRouter 解析。
+- 前端 `cd frontend && npm test`（Vitest，jsdom）：**30** 个，在 `frontend/test/`。覆盖 Option A 钉选与 latest、无效 `jobId` 不展示别的 findings、Run AI review、API client、Sync 按钮，以及 sync 后用 POST 结果替换 query cache。没有浏览器 E2E。
+- CI：backend job 跑 `pytest -q`；frontend job 在 `tsc` 之后、`npm run build` 之前跑 `npm test`。
+
+仍开着的测试缺口：
+
+- 生产环境对已 sync 仓库 `git push` 后，webhook 是否自动创建并完成 review job（手工，未做）
+- compose 启动、curl、浏览器里的完整 GitHub 登录
+- 展示层按 severity 过滤 findings
+- PR files 的 `Link` 分页还没做；现有测试锁的是「只取第一页」
+- Webhook pipeline 的任务级重试，以及同一 `pending` job 被多个 worker 同时消费，实现和测试都还没有
 
 ## 下一步
 
 1. 失败 pack 再审一轮，仍有缺口则 job 标 `partial`（尚未做）
-2. 补测：对已 sync 仓库 `git push` 后，生产 webhook 是否自动创建并完成 review job
-3. Step 11 其余：安全测试、UI polish、模型质量
+2. 补测：对已 sync 仓库 `git push` 后，生产 webhook 是否自动创建并完成 review job（仍是手工）
+3. Step 11 其余：安全加固（token 加密、GitHub ACL 复检等）、UI polish、模型质量。读接口的非属主 404 已有自动化测试
 4. Step 9D（可选、暂缓）：findings 写回 GitHub PR 评论
 5. Agent 与 streaming：开工时再把 worker 从 Celery 迁到 Taskiq。现在不改队列
 
@@ -376,7 +395,7 @@ FastAPI
 
 #### Phase 10E: CI/CD
 
-- GitHub Actions CI：后端 pytest、Alembic head / migration 检查、前端 lint / typecheck / build、Docker build
+- GitHub Actions CI：后端 pytest、Alembic head / migration 检查、前端 lint / typecheck / `npm test` / build、Docker build
 - 合并到 `main` 且 CI 全绿后，将后端镜像推到 `ghcr.io/<owner>/repo-guard-backend:<git-sha>` 和 `:main`；PR 不推镜像
 - API 与 worker 均为 Northflank Deployment（外部镜像），不再用 Combined 从 Git 构建；镜像路径 `ghcr.io/<owner>/repo-guard-backend:main`
 - Sandbox 没有「先迁移再部署」的发布管道。关掉自动更新等于每次发版都手点，所以生产跟 `:main` 自动拉新镜像
@@ -412,7 +431,7 @@ FastAPI
 
 目的：在 Step 8 功能闭环已经可用的前提下，把安全、体验、测试和模型质量补到更接近工业产品。每一条都标明在优化哪一步的哪一点。
 
-状态：11A 大部分已落地。11A-3 取消，不再排期。其余产品化项未开始。
+状态：11A 大部分已落地。11A-3 取消，不再排期。打包、review 执行、webhook 和展示层关键路径已有自动化测试。安全加固、UI、模型质量未开始。
 
 #### 11A: Review 输入打包
 
@@ -440,8 +459,8 @@ FastAPI
    单次 OpenRouter 超时不重试；空内容 / 5xx / 429 才对同一 payload 最多再打 3 次，每次重试前等 35s（两次合计 70s，覆盖 20 RPM 窗口）。  
    `OPENROUTER_READ_TIMEOUT` / `wait_for` 为 7200 秒，大于 soft limit，墙钟掐断只认 Celery。  
    过期 `processing` 回收每 6 小时跑一轮，按每个 job 自己的 `updated_at`；阈值 10800 秒（3 小时）。
-5. **单测**（11A-5 一部分）  
-   噪声过滤、每个业务文件都进某个 pack、大文件余量进后续 pack、窗口带上下文、无 patch 文件仍覆盖、超长单行切开、GitHub raw/403→blob/base64 JSON。大 PR 集成路径见 [测试与本地命令](testing.md)。
+5. **单测**（11A-5）  
+   噪声过滤、每个业务文件都进某个 pack、大文件余量进后续 pack、窗口带上下文、无 patch 文件仍覆盖、超长单行切开、GitHub raw/403→blob/base64 JSON。大 PR、部分 pack 失败、全部失败已有自动化用例，见 [测试与本地命令](testing.md)。
 
 清单：
 
@@ -449,7 +468,7 @@ FastAPI
 - [x] **11A-2 全覆盖打包 + GitHub 上下文窗口**
 - [x] **11A-3 单次请求超限再拆** — 取消
 - [x] **11A-4 模型失败与 1 小时超时**
-- [x] **11A-5 打包单测** — 无 skip / 窗口上下文 / 无 patch。超限再拆不再测
+- [x] **11A-5 打包单测** — 无 skip / 窗口上下文 / 无 patch，以及大 PR、部分成功、全部失败。超限再拆不再测
 
 合入 / 上生产前 checklist（环境变量在 Northflank api + worker，不是 Neon）：
 
@@ -468,7 +487,7 @@ FastAPI
 
 #### 安全与鉴权
 
-- [ ] **IDOR 自动化测试** — 针对 Step 8 读接口的对象级隔离：用户 B 读取用户 A 的 `GET /review-jobs/{id}`、`GET /pull-requests/{id}/files/{fileId}` 必须 404。当前 join `Repository.user_id` 已经写了，但没有测试锁住。
+- [x] **IDOR 自动化测试** — 针对 Step 8 读接口：非属主的 `GET /review-jobs/{id}`、review 列表，以及 PR / 文件读取为 404；查询把调用者 `user_id` 绑进 SQL。用 mock session，不是两个用户打真实库。
 - [ ] **读路径复检 GitHub 权限** — 针对 Step 3 和 Step 8 的 GET：租户模型目前是「谁 sync 进库」，不是 GitHub ACL。协作者被移出仓库后，库里的 patch / findings 仍可读。
 - [ ] **GitHub token 落库加密** — 针对 Step 3：`users` 表现在明文存 GitHub access token。
 - [ ] **队列与 worker 隔离** — 针对 Step 7B/7C：Celery 按 `review_job_id` 执行和标失败，不校验 user。RabbitMQ 必须保持内网；暴露队列等于可触发任意 review。
@@ -490,10 +509,10 @@ FastAPI
 - [ ] **OpenRouter 空内容 / 非 JSON** — 针对 Step 5 和 Step 6：免费/路由模型会返回 `content: null` 或 `User Safety: safe`。可换具体 chat 模型、加强日志、按模型可选 `response_format`。
 - [ ] **单次生成墙钟超时** — 针对 Step 7E：httpx `read` 只限制两次 socket 读的间隔；已用 `asyncio.wait_for` 兜底，需保证 rebuild worker 后生效。
 - [ ] **前端轮询间隔** — 针对 Step 8C：当前 `refetchInterval = 60000`。可缩短，或后续改 SSE/WebSocket。
-- [ ] **Chunk / pack 路径集成测试** — 打包单测已有；大 PR、部分成功、全部失败仍待补。11A-3 不在测试范围内。用例见 [测试与本地命令](testing.md)。
-- [ ] **展示层自动化** — 针对 Step 8C/8D：触发 review、选中 job、过滤 findings、无效 `jobId`，目前只有手工步骤。
-- [ ] **API / Webhook 集成测试** — 针对 Step 3、7、9：补 OAuth 鉴权、HMAC/ping、delivery 重放、活跃 job 去重、同步与 review 成功路径测试。
-- [ ] **GitHub API 分页** — 针对 Step 3：当前单次请求最多取 100 条；必须遍历 GitHub `Link` 分页。
+- [x] **Chunk / pack 路径测试** — 大 PR、部分成功、全部失败、去重与 `file_path` 已有。部分 pack 失败当前仍写成 `completed`。11A-3 不在测试范围内。用例见 [测试与本地命令](testing.md)。
+- [x] **展示层关键路径** — 针对 Step 8C/8D：Vitest 覆盖触发 review、钉选 job、无效 `jobId`。按 severity 过滤 findings，以及浏览器 E2E，还没有。
+- [x] **API / Webhook 测试** — 针对 Step 3、7、9：OAuth、HMAC / ping、delivery 重放、活跃 job 去重、同步与 review 路径已有 mock 测试。不是对真实 GitHub 的集成。
+- [ ] **GitHub API 分页** — 针对 Step 3：仓库和 PR 列表已跟随 `Link`，并有测试。PR files 仍只取第一页；测试锁的是这个现状。
 - [ ] **Webhook pipeline 重试与失败追踪** — 针对 Step 9B：为 sync PR/files 和创建 job 的后台任务增加瞬时错误重试、退避和最终失败状态。
 - [ ] **Worker 并发执行保护** — 针对 Step 7B/7E：终态 job 已会跳过，但同一 `pending` / `processing` job 仍可能被多个 worker 并发消费。
 - [ ] **Review 查询负载拆分** — 针对 Step 8C：列表返回摘要，选中后再请求 `GET /review-jobs/{id}`。
@@ -532,11 +551,12 @@ FastAPI
 - 前端登录 / 当前用户 / 登出、仓库与 PR 列表、PR 详情（Sync files、Run AI review、轮询）
 - 前端按 job 展示 summary / findings，支持 severity 与 file 过滤
 - 前端文件 diff（行号 + 按 finding 高亮）；无效 `jobId` 显示 not found
-- Review job / PR file 读接口按 `Repository.user_id` 做对象级隔离（缺 IDOR 自动化测试）
+- Review job / PR file 读接口按 `Repository.user_id` 做对象级隔离，非属主 404 已有自动化测试（mock session）
 - `POST /webhooks/github`：原始 body HMAC，无 JWT；仅 `opened` / `synchronize` 入队
 - Celery webhook 任务复用 sync PR / files / `create_review_job` / `execute_review_job_task`
 - `github_webhook_events` + `UNIQUE(delivery_id)`；同一 PR 只有一个 `pending` / `processing` job
 - 9C 自动化测试：新 delivery、重复 delivery、broker 发布失败补偿、ping、active job 复用/新建
+- 自动化测试：后端 122（`pytest -q`）、前端 30（`npm test`）。CI 两头都跑。清单在 [测试与本地命令](testing.md)
 - 开发环境用 ngrok 暴露 `localhost:8000`（非架构组件）；生产 webhook 直连 Northflank API
 - Vercel Hobby 托管前端；浏览器只请求同源 `/api`
 - Northflank Sandbox：API + Celery worker（GHCR `:main`）+ reclaim Cron + 备用 migrate Job
