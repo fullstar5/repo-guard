@@ -8,7 +8,7 @@
 
 在 `backend/` 执行 `pytest -q`。CI 的 backend job 跑同一条命令。当前 **122** 个用例，都在 `backend/test/`。
 
-- **打包与窗口**（`test_diff_chunking.py`、`test_diff_chunking_edges.py`）：噪声过滤（大小写、后缀、`vendor/`、空文件名）；每个该审文件进入某个 pack；超大文件的余量进入后续 pack；hunk 带上下文；没有 patch 仍覆盖该文件；超长单行拆开而不是丢弃；预算是 `max_chars × 0.8`，下限为 1；纯删除 hunk 与默认行数；重叠窗口合并并裁到文件范围内；已删除文件用 patch，不用拉下来的源码；既无 patch 也无源码时记成缺口，不跳过；pack 前言要求 `file_path`，窗口不丢；`split_patch_by_hunks` 保留小 hunk、拆开过长 hunk。
+- **打包与窗口**（`test_diff_chunking.py`、`test_diff_chunking_edges.py`）：噪声过滤（大小写、后缀、`vendor/`、空文件名）；每个该审文件进入某个 pack；超大文件的余量进入后续 pack；hunk 带上下文；没有 patch 仍覆盖该文件；超长单行拆开而不是丢弃；预算是 `max_chars × 0.9`，下限为 1；纯删除 hunk 与默认行数；重叠窗口合并并裁到文件范围内；已删除文件用 patch，不用拉下来的源码；既无 patch 也无源码时记成缺口，不跳过；pack 前言要求 `file_path`，窗口不丢；`split_patch_by_hunks` 保留小 hunk、拆开过长 hunk。
 - **GitHub 文件正文**（`test_github_pr_files.py`、`test_github_fetch_and_pagination.py`）：raw 200；Contents 403/404 回退到 blob；base64 JSON 解码；utf-8 的 `content` 字符串；空 body；非法 JSON 当文本；非对象 JSON 再 dump；Contents 500 不回退；blob 404 或缺少 URL 时返回 `None`。
 - **分页**（`test_github_fetch_and_pagination.py`）：仓库列表和 PR 列表跟随 `Link` 的 `rel=next`，后续页丢掉 query 参数；响应不是 list 时抛 `TypeError`；PR files 只取第一页，响应里还有 next 也不继续。
 - **同步落库**（`test_sync_services.py`）：解析带 `Z` 的时间和空值；仓库 upsert，并删除 GitHub 不再返回的仓库（空列表会删掉该用户全部本地仓库）；`replace_missing=True` 时删除缺失的 PR；webhook 风格的 `replace_missing=False` 不删其他 PR；空的 webhook 同步不再做后续 select；文件同步只 upsert，不删除 GitHub 已经不再列出的文件。

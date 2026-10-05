@@ -188,7 +188,7 @@ def test_large_pr_records_pack_count_summaries_and_every_file():
     result, saved, write_db, provider, _read_db = _run_execute(
         files,
         [_finding("from a", file_path="a.py"), _finding("from b", file_path="b.py")],
-        max_chars=800,
+        max_chars=700,
     )
 
     assert saved.status == ReviewJobStatus.completed
@@ -210,7 +210,7 @@ def test_partial_pack_failure_completes_and_keeps_successful_findings():
     _result, saved, write_db, _provider, _read_db = _run_execute(
         files,
         [_finding("kept", file_path="a.py"), ValueError("model down")],
-        max_chars=800,
+        max_chars=700,
     )
 
     assert saved.status == ReviewJobStatus.completed
