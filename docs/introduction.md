@@ -59,7 +59,7 @@ CodeGuard AI 的目标不是只调用一次大模型生成点评，而是走完�
 | 单个 pack | 失败记进 `error_message`，继续后面的 pack；全部失败才 `failed`。11A-3 超限再拆已取消 |
 | 整段 job | Celery soft limit 1 小时后 `self.retry()` **一次**；第二次 `failed` |
 
-Worker 仍是 Celery prefork。同时在跑的 job 数等于子进程数；等 HTTP 时不会再领下一个 job。Agent 与 streaming 的队列决定见 [进度报告](progress.md#worker-并发)。
+Worker 仍是 Celery prefork。同时在跑的 job 数等于子进程数；等 HTTP 时不会再领下一个 job。队列决定见 [进度报告](progress.md#worker-并发)。把这次一次性 review 做成可调用工具的 Review Agent，按天写在 [Agent 计划](agent-plan.md)；Day 1 不改这条 pipeline。
 
 ## 当前核心数据模型
 

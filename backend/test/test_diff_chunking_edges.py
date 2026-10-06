@@ -12,7 +12,7 @@ from app.services.diff_chunking import (
 
 
 def test_pack_budget_reserves_headroom_and_never_drops_to_zero():
-    # Current ratio is 0.9. Docs still mention 0.6; lock the implemented ratio.
+    # Lock the implemented ratio. Docs use the same 0.9.
     assert pack_content_budget(1000) == 900
     assert pack_content_budget(1000, reserved=900) == 1
     assert pack_content_budget(0) == 1

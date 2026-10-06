@@ -1,6 +1,6 @@
 # 进度报告
 
-[返回 README](../README.md) · [项目简介](introduction.md) · [测试与本地命令](testing.md)
+[返回 README](../README.md) · [项目简介](introduction.md) · [Agent 计划](agent-plan.md) · [测试与本地命令](testing.md)
 
 ## 状态
 
@@ -18,9 +18,10 @@
 | Step 11A-1 / 11A-2 / 11A-4 / 11A-5 | 已落地 |
 | Step 11A-3 | 取消。单 pack 预算远小于 128k 级窗口，不再把超限响应拆成更小请求 |
 | Step 11 其余 | 安全加固、UI、模型质量未开始。打包 / review / webhook / 展示层关键路径已有自动化测试 |
-| 自动化测试 | 后端 122、前端 30。CI 跑 `pytest -q` 与 `npm test`。生产 push、浏览器登录、severity 过滤未覆盖 |
+| 自动化测试 | 后端 125、前端 30。CI 跑 `pytest -q` 与 `npm test`。生产 push、浏览器登录、severity 过滤未覆盖 |
 | 模型选择 | PR 页可选白名单。Webhook 仍用 `OPEN_ROUTER_DEFAULT_MODEL` |
-| Worker 并发 | 继续 Celery prefork。Agent 开工时再迁 Taskiq |
+| Worker 并发 | 继续 Celery prefork。Agent 不以此为开工条件 |
+| Agent | 未开始。当前 `review_content` 无 tools。按天计划在 [Agent 计划](agent-plan.md) |
 
 ### 自动化测试
 
@@ -28,7 +29,7 @@
 
 已完成：
 
-- 后端 `cd backend && pytest -q`：**122** 个，在 `backend/test/`。覆盖打包与窗口、GitHub 文件正文、仓库和 PR 的 `Link` 分页、同步落库、review 执行（小 PR、大 PR、部分 pack 失败仍 `completed`、全部失败、去重与 `file_path`）、任务重试与 reclaim、OAuth / JWT、webhook 幂等和自动 review 流水线、HTTP sync / review、非属主 404 与查询绑定 `user_id`、限流、健康检查、OpenRouter 解析。
+- 后端 `cd backend && pytest -q`：**125** 个，在 `backend/test/`。覆盖打包与窗口、GitHub 文件正文、仓库和 PR 的 `Link` 分页、同步落库、review 执行（小 PR、大 PR、部分 pack 失败仍 `completed`、全部失败、去重与 `file_path`）、任务重试与 reclaim、OAuth / JWT、GitHub token 轮换与 401 后刷新、webhook 幂等和自动 review 流水线、HTTP sync / review、非属主 404 与查询绑定 `user_id`、限流、健康检查、OpenRouter 解析。
 - 前端 `cd frontend && npm test`（Vitest，jsdom）：**30** 个，在 `frontend/test/`。覆盖 Option A 钉选与 latest、无效 `jobId` 不展示别的 findings、Run AI review、API client、Sync 按钮，以及 sync 后用 POST 结果替换 query cache。没有浏览器 E2E。
 - CI：backend job 跑 `pytest -q`；frontend job 在 `tsc` 之后、`npm run build` 之前跑 `npm test`。
 
@@ -46,7 +47,7 @@
 2. 补测：对已 sync 仓库 `git push` 后，生产 webhook 是否自动创建并完成 review job（仍是手工）
 3. Step 11 其余：安全加固（token 加密、GitHub ACL 复检等）、UI polish、模型质量。读接口的非属主 404 已有自动化测试
 4. Step 9D（可选、暂缓）：findings 写回 GitHub PR 评论
-5. Agent 与 streaming：开工时再把 worker 从 Celery 迁到 Taskiq。现在不改队列
+5. Agent：按 [Agent 计划](agent-plan.md) 从 Day 1 实验开始。Day 8 才用 feature flag 挂进现有 Celery job。现在不改队列，也不把开工定义成迁移 Taskiq
 
 ### Worker 并发
 
@@ -54,7 +55,7 @@
 
 不采用「aio-pika 解析 Celery 消息」：重试、软超时和定时回收都要重写，消息格式却还是 Celery 的。
 
-Agent 开工时换 Taskiq，RabbitMQ 用 `taskiq-aio-pika`，仍走现有 CloudAMQP。任务是 `async def`，一个进程里可以同时挂多条模型连接，并单独取消其中一轮。Streaming 不改数据路径：打开模型 HTTP 的那个进程把工具事件写入 Redis，API 读出来给浏览器。在那之前，现有 Celery 子进程也能写 Redis。
+先前把「Agent 开工」写成换 Taskiq（RabbitMQ 用 `taskiq-aio-pika`，仍走现有 CloudAMQP）：任务是 `async def`，一个进程里可以同时挂多条模型连接，并单独取消其中一轮。这个并发选项保留，但不是 Agent 的开工条件。Day 1–7 只在 `backend/agent_experiments/` 里跑；Day 8 把同一个 runtime 挂进现有 `execute_review_job`。Streaming 不改数据路径：打开模型 HTTP 的那个进程把工具事件写入 Redis，API 读出来给浏览器。现有 Celery 子进程也能写 Redis。顺序见 [Agent 计划](agent-plan.md)。
 
 FastStream 只做异步消费者，重试和定时回收要自己写。gevent 与当前异步数据库引擎冲突。ARQ 需要真正的 Redis 连接，Upstash REST 不行。Temporal 要多一个服务。这几项不采用。
 
@@ -441,7 +442,7 @@ FastAPI
 
 - 过滤名单之外、PR 里该审的文件一个都不能 skip。装不进当前 pack 的部分进入下一个 pack，禁止丢掉文件后半段。
 - 产出必须有用：切分时要有变更前后的源码上下文。库里只有 GitHub `patch`（hunk 自带约 3 行），不够就用 Contents API / blob `sha` 拉该文件，再取 hunk 附近行。全文只在这次 review 进内存，不写库。
-- 生产是 `openrouter/free`，窗口未知；pack 字符预算按 `REVIEW_PACK_MAX_CHARS × 0.6` 预留 prompt/回复空间，不是按某个模型的 token 上限。
+- 生产是 `openrouter/free`，窗口未知；pack 字符预算按 `REVIEW_PACK_MAX_CHARS × 0.9`（`PACK_CONTENT_BUDGET_RATIO`）预留 prompt/回复空间，不是按某个模型的 token 上限。
 - 任务墙钟超时 1 小时（Celery soft limit）。到点重试一次；第二次再超时或失败则标 `failed`。不是靠 skip 文件来换 `completed`。
 
 已落地：
@@ -526,6 +527,16 @@ FastAPI
 - [ ] **组织 / 多成员** — 针对 Step 3：没有 org、没有分享仓库。
 - [ ] **评论写回 GitHub** — 即 Step 9D。
 
+### Step 12: Review Agent
+
+目的：在现有 review job 上，让模型自己决定要读哪些 PR 信息，再写出与现在相同的 findings。
+
+当前 `OpenRouterReviewProvider.review_content` 只发一轮 chat，并要求 JSON findings。请求里没有 `tools`。Python 在 `execute_review_job` 里已经滤文件、拉正文、打好窗口。
+
+每日步骤、工具该包装哪些现有函数、以及哪一天才进 Celery，写在 [Agent 计划](agent-plan.md)。Day 1 不进 API、不进 Celery、不改表。队列继续 Celery。
+
+状态：未开始
+
 ## 已完成能力
 
 - 项目基础初始化
@@ -556,7 +567,7 @@ FastAPI
 - Celery webhook 任务复用 sync PR / files / `create_review_job` / `execute_review_job_task`
 - `github_webhook_events` + `UNIQUE(delivery_id)`；同一 PR 只有一个 `pending` / `processing` job
 - 9C 自动化测试：新 delivery、重复 delivery、broker 发布失败补偿、ping、active job 复用/新建
-- 自动化测试：后端 122（`pytest -q`）、前端 30（`npm test`）。CI 两头都跑。清单在 [测试与本地命令](testing.md)
+- 自动化测试：后端 125（`pytest -q`）、前端 30（`npm test`）。CI 两头都跑。清单在 [测试与本地命令](testing.md)
 - 开发环境用 ngrok 暴露 `localhost:8000`（非架构组件）；生产 webhook 直连 Northflank API
 - Vercel Hobby 托管前端；浏览器只请求同源 `/api`
 - Northflank Sandbox：API + Celery worker（GHCR `:main`）+ reclaim Cron + 备用 migrate Job
