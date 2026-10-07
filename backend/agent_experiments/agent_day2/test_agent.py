@@ -1,10 +1,14 @@
 import asyncio
 
-from agent_experiments.agent_day2.agent import bound_ids_from_env, run_agent
+from agent_experiments.agent_day2.agent import (
+    TEST_PR_ID,
+    TEST_USER_ID,
+    run_agent,
+)
 
 QUESTIONS = (
-    "这个 PR 改了哪些文件？",
-    "看认证相关改动，指出问题。",
+    "Which files does this PR modify?",
+    "Look at the changes about authentication and point out the problems",
 )
 
 
@@ -14,7 +18,7 @@ async def main() -> None:
     Returns:
         None.
     """
-    user_id, pull_request_id = bound_ids_from_env()
+    user_id, pull_request_id = TEST_USER_ID, TEST_PR_ID
     for question in QUESTIONS:
         await run_agent(
             question,

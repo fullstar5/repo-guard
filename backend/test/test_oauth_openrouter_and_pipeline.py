@@ -194,6 +194,79 @@ def test_openrouter_review_content_rejects_empty_and_accepts_object_content():
     assert provider.model_name == "openrouter/free"
 
 
+def test_openrouter_review_content_explains_provider_error_bodies():
+    def handler(request: httpx.Request) -> httpx.Response:
+        kind = json_body(request)["messages"][1]["content"]
+        if kind == "provider-error":
+            return httpx.Response(
+                200,
+                json={
+                    "id": "gen-abc123",
+                    "error": {
+                        "code": 503,
+                        "message": "Provider returned error",
+                        "metadata": {
+                            "error_type": "provider_overloaded",
+                            "provider_name": "NVIDIA",
+                        },
+                    },
+                },
+            )
+        if kind == "no-choices":
+            return httpx.Response(
+                200,
+                json={"id": "gen-empty", "model": "openrouter/free"},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "id": "gen-mid",
+                "provider": "NVIDIA",
+                "choices": [
+                    {
+                        "finish_reason": "error",
+                        "message": {"role": "assistant", "content": "partial"},
+                        "error": {
+                            "code": 502,
+                            "message": "Provider disconnected mid-stream",
+                            "metadata": {"error_type": "provider_unavailable"},
+                        },
+                    }
+                ],
+            },
+        )
+
+    async def _inner():
+        async with _client(handler) as client:
+            provider = OpenRouterReviewProvider(client, "openrouter/free")
+            with pytest.raises(ValueError) as provider_error:
+                await provider.review_content("provider-error")
+            with pytest.raises(ValueError) as missing_choices:
+                await provider.review_content("no-choices")
+            with pytest.raises(ValueError) as mid_stream:
+                await provider.review_content("mid-stream")
+            return (
+                str(provider_error.value),
+                str(missing_choices.value),
+                str(mid_stream.value),
+            )
+
+    provider_error, missing_choices, mid_stream = asyncio.run(_inner())
+    assert provider_error == (
+        "OpenRouter completion failed: Provider returned error "
+        "(id=gen-abc123, error_type=provider_overloaded, provider=NVIDIA, code=503)"
+    )
+    assert missing_choices == (
+        "OpenRouter completion failed: response has no choices "
+        "(id=gen-empty, keys=id|model)"
+    )
+    assert mid_stream == (
+        "OpenRouter completion failed: Provider disconnected mid-stream "
+        "(id=gen-mid, error_type=provider_unavailable, code=502, "
+        "finish_reason=error, provider=NVIDIA)"
+    )
+
+
 def test_openrouter_rejects_missing_summary_and_non_list_findings():
     provider = OpenRouterReviewProvider(AsyncMock(), "openrouter/free")
     with pytest.raises(ValueError, match="missing summary"):

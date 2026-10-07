@@ -2,20 +2,26 @@ import json
 import os
 
 import httpx  # pyright: ignore[reportMissingImports]
+from agent_experiments.agent_day2.tools import (
+    TOOLS,
+    BoundReviewTools,
+    parse_tool_arguments,
+)
 from app.core.config import get_settings
 from app.services.openrouter_provider import OpenRouterReviewProvider
-from agent_experiments.agent_day2.tools import TOOLS, BoundReviewTools, parse_tool_arguments
 
 settings = get_settings()
 
 MAX_ROUNDS = 8
 TEST_MODEL_NAME = "nvidia/nemotron-3.5-lightning:free"
 SYSTEM_PROMPT = (
-    "你是 CodeGuard 的 review 助手。"
-    "这一轮要看的 pull request 已经选定，不要向用户索要仓库名、PR 编号或 token。"
-    "需要信息时使用提供的工具。只读取回答所需要的文件。\n"
-    "如果用户只想知道改了哪些文件，列出文件即可，不要逐个读取全文。\n"
-    "如果用户要求审查或指出问题，最后只输出一个 JSON 对象，不要用 markdown 围栏：\n"
+    "You are a CodeGuard review assistant. "
+    "The pull request for this run is already selected. "
+    "Do not ask the user for a repository name, pull request number, or token. "
+    "Use the provided tools when you need information. Read only the files required to answer.\n"
+    "If the user only wants to know which files changed, list those files. "
+    "Do not read every file.\n"
+    "If the user asks for a review or for problems, finish with one JSON object and no markdown fence:\n"
     "{\n"
     '  "summary": "short overall summary",\n'
     '  "findings": [\n'
@@ -29,31 +35,12 @@ SYSTEM_PROMPT = (
     "    }\n"
     "  ]\n"
     "}\n"
-    "没有实质问题时 findings 为空数组。"
-    "file_path 必须来自工具返回的路径。不要编造文件内容。"
+    "When there are no real issues, findings is an empty array. "
+    "file_path must be a path returned by a tool. Do not invent file contents."
 )
 
-
-def bound_ids_from_env() -> tuple[int, int]:
-    """Read the local user and pull request this run is allowed to see.
-
-    Returns:
-        ``(user_id, pull_request_id)``.
-
-    Raises:
-        RuntimeError: Either variable is missing or not an integer.
-    """
-    user_raw = os.environ.get("AGENT_DAY2_USER_ID", "").strip()
-    pull_request_raw = os.environ.get("AGENT_DAY2_PULL_REQUEST_ID", "").strip()
-    if not user_raw or not pull_request_raw:
-        raise RuntimeError(
-            "Set AGENT_DAY2_USER_ID and AGENT_DAY2_PULL_REQUEST_ID to local ids. "
-            "The pull request id is the number in /pull-requests/{id}."
-        )
-    try:
-        return int(user_raw), int(pull_request_raw)
-    except ValueError as exc:
-        raise RuntimeError("AGENT_DAY2_USER_ID and AGENT_DAY2_PULL_REQUEST_ID must be integers.") from exc
+TEST_USER_ID = 1
+TEST_PR_ID = 31 
 
 
 def _print_block(label: str, body: object) -> None:
@@ -76,12 +63,14 @@ def _print_block(label: str, body: object) -> None:
 async def _call_llm(
     client: httpx.AsyncClient,
     messages: list[dict[str, object]],
+    tools: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
-    """Send one Chat Completions request that includes the Day 2 tools.
+    """Send one Chat Completions request that includes tools.
 
     Args:
         client: Async HTTP client. The caller owns its timeout.
         messages: Transcript so far, including tool results.
+        tools: Tool schemas for this request. Day 2 uses its own list when omitted.
 
     Returns:
         The assistant message object from the first choice.
@@ -102,7 +91,7 @@ async def _call_llm(
             "model": TEST_MODEL_NAME,
             "temperature": 0,
             "messages": messages,
-            "tools": TOOLS,
+            "tools": TOOLS if tools is None else tools,
             "tool_choice": "auto",
         },
     )
@@ -117,7 +106,7 @@ async def _call_llm(
         raise RuntimeError(f"OpenRouter returned no choices: {payload}")
     message = choices[0].get("message")
     if not isinstance(message, dict):
-        raise RuntimeError(f"OpenRouter returned no assistant message: {payload}")
+        raise TypeError(f"OpenRouter returned no assistant message: {payload}")
     return message
 
 
@@ -245,8 +234,8 @@ async def run_agent(user_text: str, *, user_id: int, pull_request_id: int) -> st
 async def _main() -> None:
     import sys
 
-    user_id, pull_request_id = bound_ids_from_env()
-    question = " ".join(sys.argv[1:]).strip() or "这个 PR 改了哪些文件？"
+    user_id, pull_request_id = TEST_USER_ID, TEST_PR_ID
+    question = " ".join(sys.argv[1:]).strip() or "Which files does this PR modify?"
     await run_agent(question, user_id=user_id, pull_request_id=pull_request_id)
 
 

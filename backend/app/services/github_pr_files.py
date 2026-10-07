@@ -2,13 +2,11 @@ import base64
 import json
 
 import httpx  # pyright: ignore[reportMissingImports]
+from app.models.pr_file import PRFile
+from app.models.pull_request import PullRequest
+from app.models.repository import Repository
 from sqlalchemy import select  # pyright: ignore[reportMissingImports]
 from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
-
-from app.models.pull_request import PullRequest
-from app.models.pr_file import PRFile
-from app.models.repository import Repository
-
 
 # get PR files from github and sync to database
 

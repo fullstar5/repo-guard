@@ -1,4 +1,5 @@
 import json
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -197,32 +198,36 @@ class BoundReviewTools:
         self.pull_request_id = pull_request_id
         self.http_client = http_client
         self.github_tokens = GitHubTokenSession(user_id, http_client)
+        self.tool_functions: dict[
+            str,
+            Callable[[dict[str, object]], Awaitable[dict[str, object]]],
+        ] = {
+            "get_pull_request_info": self.get_pull_request_info,
+            "get_pull_request_files": self.get_pull_request_files,
+            "list_reviewable_files": self.list_reviewable_files,
+            "get_file_content": self.get_file_content,
+        }
 
     async def execute(self, name: str, arguments: dict[str, object]) -> dict[str, object]:
-        """Run one tool by name.
+        """Run the Python function registered under this tool name.
 
         Args:
             name: Tool name from the assistant message.
-            arguments: Parsed function arguments. Ignored for tools that take none.
+            arguments: Parsed function arguments.
 
         Returns:
             The tool payload, or an error object the model can read.
         """
-        if name == "get_pull_request_info":
-            return await self.get_pull_request_info()
-        if name == "get_pull_request_files":
-            return await self.get_pull_request_files()
-        if name == "list_reviewable_files":
-            return await self.list_reviewable_files()
-        if name == "get_file_content":
-            path = arguments.get("path")
-            if not isinstance(path, str) or not path.strip():
-                return {"error": "path must be a non-empty string."}
-            return await self.get_file_content(path.strip())
-        return {"error": f"Unknown tool: {name}"}
+        function = self.tool_functions.get(name)
+        if function is None:
+            return {"error": f"Unknown tool: {name}"}
+        return await function(arguments)
 
-    async def get_pull_request_info(self) -> dict[str, object]:
+    async def get_pull_request_info(self, arguments: dict[str, object]) -> dict[str, object]:
         """Load metadata for the bound pull request.
+
+        Args:
+            arguments: Unused. The pull request is already bound on this object.
 
         Returns:
             Number, title, state, author, branches, and repository full name.
@@ -284,8 +289,11 @@ class BoundReviewTools:
             await db.rollback()
             return snapshots
 
-    async def get_pull_request_files(self) -> dict[str, object]:
+    async def get_pull_request_files(self, arguments: dict[str, object]) -> dict[str, object]:
         """List changed files without their patches or source text.
+
+        Args:
+            arguments: Unused. The pull request is already bound on this object.
 
         Returns:
             Up to the synced page of files. The existing sync stores at most 100.
@@ -298,8 +306,11 @@ class BoundReviewTools:
             "files": [_file_summary(pr_file) for pr_file in files],
         }
 
-    async def list_reviewable_files(self) -> dict[str, object]:
+    async def list_reviewable_files(self, arguments: dict[str, object]) -> dict[str, object]:
         """List files the production review filter would keep.
+
+        Args:
+            arguments: Unused. The pull request is already bound on this object.
 
         Returns:
             Reviewable paths, plus the paths the filter drops.
@@ -323,16 +334,20 @@ class BoundReviewTools:
             ],
         }
 
-    async def get_file_content(self, path: str) -> dict[str, object]:
+    async def get_file_content(self, arguments: dict[str, object]) -> dict[str, object]:
         """Read one changed file's patch and, when it still exists, its head text.
 
         Args:
-            path: Filename stored on the pull request file row.
+            arguments: Must include ``path``, a filename from the changed-file list.
 
         Returns:
             Status, clipped patch, and clipped head text. Removed files do not
-            fetch head text. An error object when the path is not in this PR.
+            fetch head text. An error object when the path is missing or not in this PR.
         """
+        path = arguments.get("path")
+        if not isinstance(path, str) or not path.strip():
+            return {"error": "path must be a non-empty string."}
+        path = path.strip()
         async with AsyncSessionLocal() as db:
             pull_request, repository = await get_pull_request_with_repository(
                 db,

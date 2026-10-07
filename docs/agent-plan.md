@@ -124,6 +124,7 @@ Day 1 的 mock 可以暂时用 `repo` + `pr_number`。这个参数形状只存�
 1. 显式 state：已读文件路径、工具结果摘要、当前轮次、绑定的 `pull_request_id` 与 `user_id`。
 2. 同一路径的全文不重复拉取，除非这次运行明确要求刷新。
 3. `messages` 和 state 可序列化。checkpoint 先落在实验目录的本地 JSON。不新建表。
+4. `get_file_content` 与 `refresh_file_content` 的说明写清何时调用。模型自己选工具。执行器不根据用户句子接受或拒绝刷新。
 
 成功标准：追问「刚才那个登录文件还有没有别的问题」时，state 里已有该文件则直接分析；没有则再调 `get_file_content`。进程停掉后，用同一份 checkpoint 能接着跑。
 
@@ -234,6 +235,30 @@ POST /pull-requests/{id}/review-jobs
 
 状态：未开始
 
+## Day 9 之后：有兴趣再学
+
+这些不插进 Day 3，也不替代现成的 OpenRouter 模型。Day 9 的 bad case 积累够了再碰。
+
+### 单轮锁定工具
+
+Chat Completions 的 `tool_choice` 可以在某一轮指定函数名，而不是 `auto`。用户明确要求刷新、而这次调用必须打到 GitHub 时，可以把这一轮锁成 `refresh_file_content`。模型这时不能只写正文就结束。平时保持 `auto`，否则模型失去自己选工具的机会。
+
+### 工具变多之后再检索
+
+现在只有几个工具，全部放进请求。工具多到十几二十个、模型经常选错时，再加一层检索：先选出和这句话相关的几个 schema，再交给主模型。这不是 Day 3 的问题。
+
+### Planner 与执行分开
+
+Day 5 已经是这件事：规划者先写出要读哪些文件、要不要重读，执行循环再按计划调工具。不要在 Day 3 再套一个总指挥模型。
+
+### 微调（SFT）
+
+微调是在一个现成基座模型上，用你自己的例子再训练一小段。不是从零写模型。数据是线上选错工具的 bad case：用户问题、当时该调用的工具和参数、不该调用的情况。训练结果是原模型的一个新版本。
+
+OpenRouter 上现在用的免费模型一般不把权重交给你训。要做的话，换一个开放权重的模型，或使用厂商的 fine-tuning 接口。Day 9 先把选错的次数和输入输出记下来，那些记录以后就是训练集。在那之前，工具说明、执行器拒绝错误调用、以及换一个函数调用更稳的现成模型，都比微调便宜。
+
+状态：未排期
+
 ## 对照
 
 | 天 | 交付 | 碰生产代码 |
@@ -247,5 +272,6 @@ POST /pull-requests/{id}/review-jobs
 | Day 7 | handoff 对比，选定默认编排 | 否 |
 | Day 8 | feature flag 挂进 `execute_review_job` | 是 |
 | Day 9+ | fixture、trace、guardrails、成本；然后才是对话 UI | 按需 |
+| Day 9 之后 | 单轮锁定 `tool_choice`、工具检索、SFT | 按需 |
 
-下面这些不出现在 Day 1，各自留在上表对应的那一天：LangChain、LangGraph、OpenAI Agents SDK、多 Agent、向量库、长期记忆、MCP、Planner 框架、webhook 改走 agent、自动 GitHub 评论、把 Celery 换成 Taskiq。
+下面这些不出现在 Day 1，各自留在上表对应的那一天：LangChain、LangGraph、OpenAI Agents SDK、多 Agent、向量库、长期记忆、MCP、Planner 框架、webhook 改走 agent、自动 GitHub 评论、把 Celery 换成 Taskiq。SFT 和工具检索放在 Day 9 之后。
