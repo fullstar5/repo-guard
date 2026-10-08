@@ -1,19 +1,20 @@
 # 测试与本地命令
 
-[返回 README](../README.md) · [进度报告](progress.md)
+[返回 README](../README.md) · [进度报告](progress.md) · [Agent 计划](agent-plan.md)
 
 自动化测试不连 GitHub、OpenRouter、Postgres 或 Redis。后端用 `unittest.mock` 和 `httpx.MockTransport`；前端用 Vitest 与 Testing Library，跑在 jsdom 里，没有浏览器 E2E。下面是仓库里已经存在的用例。做到哪一步、还缺什么，写在 [进度报告](progress.md)。compose、curl 以及生产环境手工检查仍在文末，它们不是自动化用例。
 
 ## Backend tests
 
-在 `backend/` 执行 `pytest -q`。CI 的 backend job 跑同一条命令。当前 **122** 个用例，都在 `backend/test/`。
+在 `backend/` 执行 `pytest -q`。CI 的 backend job 跑同一条命令。当前 **125** 个用例，都在 `backend/test/`。
 
-- **打包与窗口**（`test_diff_chunking.py`、`test_diff_chunking_edges.py`）：噪声过滤（大小写、后缀、`vendor/`、空文件名）；每个该审文件进入某个 pack；超大文件的余量进入后续 pack；hunk 带上下文；没有 patch 仍覆盖该文件；超长单行拆开而不是丢弃；预算是 `max_chars × 0.8`，下限为 1；纯删除 hunk 与默认行数；重叠窗口合并并裁到文件范围内；已删除文件用 patch，不用拉下来的源码；既无 patch 也无源码时记成缺口，不跳过；pack 前言要求 `file_path`，窗口不丢；`split_patch_by_hunks` 保留小 hunk、拆开过长 hunk。
+- **打包与窗口**（`test_diff_chunking.py`、`test_diff_chunking_edges.py`）：噪声过滤（大小写、后缀、`vendor/`、空文件名）；每个该审文件进入某个 pack；超大文件的余量进入后续 pack；hunk 带上下文；没有 patch 仍覆盖该文件；超长单行拆开而不是丢弃；预算是 `max_chars × 0.9`，下限为 1；纯删除 hunk 与默认行数；重叠窗口合并并裁到文件范围内；已删除文件用 patch，不用拉下来的源码；既无 patch 也无源码时记成缺口，不跳过；pack 前言要求 `file_path`，窗口不丢；`split_patch_by_hunks` 保留小 hunk、拆开过长 hunk。
 - **GitHub 文件正文**（`test_github_pr_files.py`、`test_github_fetch_and_pagination.py`）：raw 200；Contents 403/404 回退到 blob；base64 JSON 解码；utf-8 的 `content` 字符串；空 body；非法 JSON 当文本；非对象 JSON 再 dump；Contents 500 不回退；blob 404 或缺少 URL 时返回 `None`。
 - **分页**（`test_github_fetch_and_pagination.py`）：仓库列表和 PR 列表跟随 `Link` 的 `rel=next`，后续页丢掉 query 参数；响应不是 list 时抛 `TypeError`；PR files 只取第一页，响应里还有 next 也不继续。
 - **同步落库**（`test_sync_services.py`）：解析带 `Z` 的时间和空值；仓库 upsert，并删除 GitHub 不再返回的仓库（空列表会删掉该用户全部本地仓库）；`replace_missing=True` 时删除缺失的 PR；webhook 风格的 `replace_missing=False` 不删其他 PR；空的 webhook 同步不再做后续 select；文件同步只 upsert，不删除 GitHub 已经不再列出的文件。
 - **Review 执行**（`test_review_execution.py`、`test_review_job_idempotency.py`、`test_review_models.py`、`test_review_http_retries.py`）：小 PR 执行后 `total_chunks = 1`、状态 `completed`，summary 与 findings 入库，缺 `file_path` 会补上；创建时是 `pending` 且 `total_chunks = 0`；大 PR 的 `total_chunks` 等于 pack 数，summary 拼接，每个文件的 findings 都写入；部分 pack 失败时 job 仍是 `completed`，`error_message` 带失败信息，成功的 findings 保留；全部 pack 失败则标 `failed`；拉文件失败仍审 patch，并记下说明；源码和 patch 都缺时仍作为缺口送审；只有噪声文件则失败；不支持的 provider 标失败；执行过程中的 `SoftTimeLimitExceeded` 在这一层不标 `failed`；`execute_by_id` 跳过终态和缺失行；已有 active job 时复用、不新建；PR 消失时抛 `ValueError`；按 summary + suggestion 做空白和大小写去重，写入前去重；白名单模型通过，未知模型 `ValidationError`。OpenRouter HTTP：429 会重试 3 次，相邻尝试之间 sleep 35 秒；500 在等待一次后可以成功；`TimeoutError` 和 soft time limit 不重试。
 - **任务重试与回收**（`test_review_job_task.py`、`test_review_reclaim_and_retries.py`）：第一次 soft timeout 整单重试且不标 `failed`，第二次标 `failed`；瞬时错误在次数用尽前重试，用尽后标 `failed`；非瞬时错误不重试，直接失败（空消息变成类型名）；countdown 从 5 秒翻倍，上限 300 秒；空白 `error_message` 会被换掉；job 不存在时相关标记返回空；reclaim 只更新查询返回的行（状态为 `processing`，且 `updated_at` 早于截止时间）并 commit，没有过期行则不 commit；Beat 任务会调用回收服务。
+- **GitHub token**（`test_github_tokens.py`）：轮换后的 access / refresh 与过期时间写入用户；refresh grant 发到 GitHub；`GitHubTokenSession` 在 401 后刷新一次并重试。
 - **登录与 OAuth**（`test_http_api.py`、`test_oauth_openrouter_and_pipeline.py`）：JWT 往返，过期和垃圾 token 为 401；`/auth/me` 接受 Bearer 和 cookie，用户不存在为 401；没有 `sub` 为 401；非数字 `sub` 当前会抛出未处理的 `ValueError`；login 写入 state cookie，state 不匹配为 400；callback 写入 access cookie，logout 清掉它；authorize URL 带上 state 和 client；GitHub 错误体为 400；优先已验证的主邮箱，emails 403 时邮箱为 `None`；同一 GitHub 用户先插入再更新。
 - **Webhook 与自动 review 流水线**（`test_webhook_idempotency.py`、`test_http_api.py`、`test_oauth_openrouter_and_pipeline.py`）：新 delivery 登记并 dispatch；相同 delivery 返回 200 且不 dispatch；发布失败删掉 delivery 并返回 503；`ping` 返回 200 且不登记；错误签名 401；非法 JSON 400；已处理事件缺少 `X-GitHub-Delivery` 为 400；`closed` 不处理；`opened` 会 dispatch。流水线：未知仓库、没有 token、已有 active job 时不新建；每个带 token 的本地仓库入队一个 job（没有 user 的行跳过）；入队失败把 job 标成 `failed` 并 commit；payload 没有 PR number 时不打开数据库。Celery 任务转到 `process_github_pull_request_event`。
 - **HTTP 同步与 review**（`test_http_api.py`）：仓库同步没有 token 时 400，有 token 时返回 items；别人的仓库同步 PR 为 404，成功路径传入 `replace_missing=True`；文件同步没有 token 时 400；不属于当前用户的 PR、文件列表、单个文件为 404；创建 review 返回 202，并且 `delay` 一次；复用 active job 时不再 `delay`；入队失败返回 503，状态为 `failed`；列表、读取、创建在非所有者时为 404；未知模型 422；`GET /review-models` 返回白名单。

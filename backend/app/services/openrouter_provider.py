@@ -95,6 +95,150 @@ def _normalize_severity(value: object) -> str:
     return SEVERITY_ALIASES.get(normalized, "medium")
 
 
+def _one_line(value: object, limit: int = 300) -> str:
+    """Flatten a log field onto one line.
+
+    Args:
+        value: Text or other JSON value to include in an error message.
+        limit: Maximum characters kept.
+
+    Returns:
+        A single-line string, truncated with an ellipsis when needed.
+    """
+    text = " ".join(str(value).split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
+def _provider_error_parts(error: object) -> tuple[str | None, list[str]]:
+    """Read a message and log annotations from an OpenRouter error object.
+
+    Args:
+        error: The ``error`` field on a response or on one choice.
+
+    Returns:
+        The provider message, plus annotations such as ``error_type`` and
+        ``code``. A non-object error becomes the message itself.
+    """
+    if not isinstance(error, dict):
+        text = _one_line(error)
+        return (text or None), []
+
+    raw_message = error.get("message")
+    message = _one_line(raw_message) if raw_message else None
+    details: list[str] = []
+    metadata = error.get("metadata")
+    if isinstance(metadata, dict):
+        error_type = metadata.get("error_type")
+        if error_type:
+            details.append(f"error_type={_one_line(error_type, 80)}")
+        provider_name = metadata.get("provider_name")
+        if provider_name:
+            details.append(f"provider={_one_line(provider_name, 80)}")
+    code = error.get("code")
+    if code is not None and code != "":
+        details.append(f"code={_one_line(code, 40)}")
+    return message, details
+
+
+def _format_openrouter_failure(message: str | None, details: list[str]) -> str:
+    """Build the exception text stored in review logs.
+
+    Args:
+        message: Provider error message, when OpenRouter sent one.
+        details: Short ``key=value`` annotations such as the generation id.
+
+    Returns:
+        One line beginning with ``OpenRouter completion failed``.
+    """
+    suffix = f" ({', '.join(details)})" if details else ""
+    if message:
+        return f"OpenRouter completion failed: {message}{suffix}"
+    if suffix:
+        return f"OpenRouter completion failed{suffix}"
+    return "OpenRouter completion failed: provider returned an error"
+
+
+def _describe_openrouter_payload(payload: object) -> str | None:
+    """Explain a 200 body that is not a usable chat completion.
+
+    OpenRouter commits HTTP 200 when a provider accepts the request. If that
+    provider then fails, the body is an ``error`` object and may omit
+    ``choices``. A choice can also finish with ``finish_reason`` ``error``.
+
+    Args:
+        payload: Decoded JSON body from ``/chat/completions``.
+
+    Returns:
+        A log message when the body cannot be reviewed, otherwise None.
+    """
+    if not isinstance(payload, dict):
+        return "OpenRouter completion failed: response was not a JSON object."
+
+    details: list[str] = []
+    generation_id = payload.get("id")
+    if generation_id:
+        details.append(f"id={_one_line(generation_id, 80)}")
+
+    def _with_payload_provider(error_details: list[str]) -> list[str]:
+        combined = details + error_details
+        if any(item.startswith("provider=") for item in combined):
+            return combined
+        provider_name = payload.get("provider")
+        if provider_name:
+            combined.append(f"provider={_one_line(provider_name, 80)}")
+        return combined
+
+    top_error = payload.get("error")
+    if top_error is not None:
+        message, error_details = _provider_error_parts(top_error)
+        return _format_openrouter_failure(
+            message,
+            _with_payload_provider(error_details),
+        )
+
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        keys = "|".join(str(key) for key in payload.keys())
+        return _format_openrouter_failure(
+            "response has no choices",
+            _with_payload_provider([f"keys={keys}"]),
+        )
+
+    choice = choices[0]
+    if not isinstance(choice, dict):
+        return _format_openrouter_failure(
+            "first choice was not an object",
+            _with_payload_provider([]),
+        )
+
+    finish_reason = choice.get("finish_reason")
+    choice_error = choice.get("error")
+    if choice_error is not None or finish_reason == "error":
+        message, error_details = (
+            _provider_error_parts(choice_error)
+            if choice_error is not None
+            else (None, [])
+        )
+        if finish_reason:
+            error_details.append(f"finish_reason={_one_line(finish_reason, 40)}")
+        if not message:
+            message = "provider ended the completion with an error"
+        return _format_openrouter_failure(message, _with_payload_provider(error_details))
+
+    if not isinstance(choice.get("message"), dict):
+        extra: list[str] = []
+        if finish_reason:
+            extra.append(f"finish_reason={_one_line(finish_reason, 40)}")
+        return _format_openrouter_failure(
+            "choice is missing message",
+            _with_payload_provider(extra),
+        )
+
+    return None
+
+
 
 class OpenRouterReviewProvider(ReviewProvider):
     """Call an online review model through OpenRouter."""
@@ -122,7 +266,8 @@ class OpenRouterReviewProvider(ReviewProvider):
             Parsed summary and findings.
 
         Raises:
-            ValueError: The model returned empty content or unusable JSON.
+            ValueError: The model returned empty content or unusable JSON, or
+                OpenRouter returned a provider error in a 200 body.
             httpx.HTTPStatusError: OpenRouter returned a non-2xx response.
         """
         # Keep the prompt small and focused so free models can respond reliably.
@@ -178,7 +323,19 @@ class OpenRouterReviewProvider(ReviewProvider):
         )
         response.raise_for_status()
 
-        payload = response.json()
+        try:
+            payload = response.json()
+        except json.JSONDecodeError as exc:
+            preview = _one_line(response.text, 200)
+            raise ValueError(
+                "OpenRouter completion failed: response was not JSON. "
+                f"body_preview={preview!r}"
+            ) from exc
+
+        failure = _describe_openrouter_payload(payload)
+        if failure is not None:
+            raise ValueError(failure)
+
         message = payload["choices"][0]["message"]
         raw_content = message.get("content")
 
