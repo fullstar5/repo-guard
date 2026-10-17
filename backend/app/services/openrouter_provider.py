@@ -282,6 +282,11 @@ class OpenRouterReviewProvider(ReviewProvider):
             json={
                 "model": self.model_name,
                 "temperature": 0.2,
+                # Medium keeps about half of max_tokens for reasoning.
+                # The rest is reserved for the review JSON. The pack itself
+                # is input and does not count against this limit.
+                "max_tokens": 8129,
+                "reasoning": {"effort": "medium"},
                 "messages": [
                     {
                         "role": "system",

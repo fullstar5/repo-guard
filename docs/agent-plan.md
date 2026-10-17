@@ -4,7 +4,7 @@
 
 把现有的一次性 review 变成：模型自己决定还缺什么信息，调用 CodeGuard 已有的读函数，再写出与现在相同的 findings。
 
-状态：未开始。当前代码没有 tool calling。
+状态：Day 1–4 的实验已经跑通。产品 review 仍是下面这条没有 tools 的 pack 路径。下一步是 Day 5。
 
 ## 现在的 review 在做什么
 
@@ -40,7 +40,7 @@ Findings 字段已经固定，前后端都认这套：`severity`（`low` \| `med
 
 ## 原则
 
-1. 先写明白一层循环：模型决定工具，Python 执行，结果交回模型，再决定下一步。框架留到这层能自己跑通之后。
+1. 先写明白一层循环：模型决定工具，Python 执行，结果交回模型，再决定下一步。LangChain、LangGraph、Agents SDK 要学，也要在实验里对照实现，但放在 Day 8 的手写 runtime 进 Celery 之后，不替换这条主线。
 2. 工具是现有 service 的薄包装。Day 2 起不再写第二套 GitHub 客户端。
 3. 模型不传入 token，也不传入任意 `owner/repo`。对话入口用当前用户的 `user_id`。Celery 入口从 `review_job_id` → PR → `Repository.user_id` 推出主人，再开现有的 `GitHubTokenSession`。
 4. 第一阶段是一个 Review Agent 加多个工具。专家拆分、handoff、换队列都排在后面的天数里。
@@ -88,7 +88,7 @@ GitHub 评论写回仍是 Step 9D，暂缓，不绑在某一天的 Agent 任务�
 
 Day 1 的 mock 可以暂时用 `repo` + `pr_number`。这个参数形状只存在于实验里。
 
-状态：未开始
+状态：实验已跑通。产品路径未改。
 
 ## Day 2：三个真工具，输出对齐 findings
 
@@ -113,7 +113,7 @@ Day 1 的 mock 可以暂时用 `repo` + `pr_number`。这个参数形状只存�
 - 「看认证相关改动」会在文件列表之后读取相关文件，再给出 findings。
 - 输出含 severity、summary、file_path、start_line、end_line、suggestion。缺字段时解析失败并记在 trace 里。
 
-状态：未开始
+状态：实验已跑通。产品路径未改。
 
 ## Day 3：状态、工作记忆、checkpoint
 
@@ -128,7 +128,7 @@ Day 1 的 mock 可以暂时用 `repo` + `pr_number`。这个参数形状只存�
 
 成功标准：追问「刚才那个登录文件还有没有别的问题」时，state 里已有该文件则直接分析；没有则再调 `get_file_content`。进程停掉后，用同一份 checkpoint 能接着跑。
 
-状态：未开始
+状态：实验已跑通。产品路径未改。
 
 ## Day 4：按引用继续取代码
 
@@ -140,11 +140,11 @@ Day 1 的 mock 可以暂时用 `repo` + `pr_number`。这个参数形状只存�
 2. `search_code`：先在已同步的文件名和 patch 里做文本搜索。
 3. 单次工具返回沿用 `REVIEW_PACK_MAX_CHARS` 的量级做截断，结果里写明被截断。全文仍只留在这次运行的内存里，不写库。
 
-向量检索留到文本搜索和 import 跟随不够用的时候再加。Day 4 不引入独立向量库。
+向量库不在 Day 4–9。Day 9 的 bad case 若经常是「import 和文本搜索都找不到、但语义上相关的文件」，再在 Day 9 之后引入。Day 4 不建向量库。
 
 成功标准：改 `login` 且该文件引用认证服务时，agent 会继续取那个服务文件。`filter_reviewable_files` 会忽略的 lockfile 不会被拿来当正文。
 
-状态：未开始
+状态：实验已跑通。产品路径未改。
 
 ## Day 5：Review Planner
 
@@ -161,34 +161,38 @@ Day 1 的 mock 可以暂时用 `repo` + `pr_number`。这个参数形状只存�
 
 状态：未开始
 
-## Day 6：专家作为工具
+## Day 6：多 Agent 协作（编排者调用专家）
 
-目的：主 Review Agent 保持最终控制权，把已收集的上下文交给安全、缺陷、性能三个分析函数。
+目的：同一次 review 里有多个 Agent。编排者决定叫谁，专家各自审查自己的那一片上下文，汇总者把多份 findings 合成一份。
 
-这是 agents as tools：主 agent 决定叫谁，专家返回 findings，不接管后续对话。
+这是 agents as tools，但是每一次调用都是一次独立的模型对话，不是编排者自己把三个角度写完。
 
-三个函数的输入都是已经取到的 diff、源码和仓库约定。返回值仍是 `ReviewFindingDraft` 列表。现有表没有 `category` 列；关注点写进 `summary`，不为此改表。
+角色：
 
-| 函数 | 关注 |
-|---|---|
-| 安全 | 认证、授权、注入、密钥、XSS、CSRF、越权 |
-| 缺陷 | 空值、边界、错误状态、竞态、逻辑错误 |
-| 性能 | N+1、多余请求、过重循环、不必要的重渲染、可缓存点 |
+| Agent | 做什么 | 不做什么 |
+|---|---|---|
+| 编排者 | 读 Day 5 的 plan。认证相关交给安全专家，空值和逻辑交给缺陷专家，热路径交给性能专家。可以同时叫多个 | 不自己产出最终 findings。不把 GitHub token 交给专家 |
+| 安全专家 | 只看分给它的 diff 和 Day 4 取回的相关文件。查认证、授权、注入、密钥、XSS、CSRF、越权 | 不能调用读文件工具，不能扩大范围 |
+| 缺陷专家 | 同一类输入。查空值、边界、错误状态、竞态、逻辑错误 | 同上 |
+| 性能专家 | 同一类输入。查 N+1、多余请求、过重循环、不必要的重渲染、可缓存点 | 同上 |
+| 汇总者 | 收齐专家的 `ReviewFindingDraft`。同一文件、同一行、同一问题的多条合成一条，按 severity 排序 | 不新增专家没写过的问题 |
 
-成功标准：认证改动会调用安全分析；热路径或循环会调用性能分析；最终仍是一份 findings，字段与现有表一致。
+每个专家有自己的 system prompt 和自己的 `messages`。输入是编排者打包的一小段上下文，不是整段编排对话。输出仍是 `ReviewFindingDraft`。现有表没有 `category` 列；关注点写进 `summary`。
+
+成功标准：认证改动至少叫到安全专家；热路径或循环至少叫到性能专家。trace 里能看到编排者的分发、每一家专家的单独回复、以及汇总后的一份 findings。专家没被分到的文件不出现在它的输入里。
 
 状态：未开始
 
-## Day 7：Handoff 实验
+## Day 7：换一种协作（handoff）
 
-目的：在同一批 PR 上对比两种编排，并记下 CodeGuard 默认用哪一种。
+目的：Day 6 是编排者始终拿着对话和读文件工具。这一天实验另一种协作：分诊之后，把后续工作整个交给一个专家。
 
-- **Agents as tools（Day 6）：** 主 agent 全程持有对话和工具。
-- **Handoff：** Triage 把任务交给一个专家，由该专家接管后续工具调用，直到它给出 findings。
+- **Day 6：** 编排者调用专家，专家只返回 findings，然后回到编排者。
+- **Handoff：** 分诊 Agent 选定一个专家后，该专家接管工具调用和后续轮次，直到它写出 findings。编排者不再插嘴。
 
-对比时记录：谁丢了上下文、谁重复读文件、findings 是否仍能解析进 `ReviewFindingDraft`、轮次和耗时。
+同一个 PR 两种都跑。记录谁丢了上下文、谁重复读文件、findings 能否解析、轮次和耗时。
 
-成功标准：实验笔记写明默认编排。另一种留在 `backend/agent_experiments/`。这一天不改 worker。
+成功标准：笔记写明 CodeGuard 默认用 Day 6。Handoff 留在 `backend/agent_experiments/`。默认用 Day 6，是因为读文件的权限必须留在绑定了 `user_id` 和 `pull_request_id` 的编排者手里。这一天不改 worker。
 
 状态：未开始
 
@@ -220,42 +224,38 @@ POST /pull-requests/{id}/review-jobs
 
 状态：未开始
 
-## Day 9 及以后：评估和产品化
+## Day 9：评估、观测和上下文
 
-目的：知道这套 agent 在哪些 PR 上会说错，以及它和现有 pack 路径的成本、延迟差多少。
+目的：知道这套 agent 在哪些 PR 上会说错，以及它和现有 pack 路径的成本、延迟差多少。Day 9 之后的微调和向量库都用这里留下的记录。
 
 步骤：
 
-1. 固定一组 PR fixture 和 bad case（漏报、误报、读了不该读的文件、findings 解析失败）。
-2. 把 Day 1 的打印换成可查询事件：模型请求、工具名、参数、错误、耗时。10F 那种完整监控仍不做。
-3. Guardrails：轮次上限、工具参数越界、输出解析失败时 job 记 `error_message`，不写入半截脏 findings。
-4. 记录 token、墙钟时间和 findings 数量，与同一 PR 的 pack 路径对比。
-5. 对话 UI 放在「flag 打开时能稳定写出 findings」之后。页面读的仍是 `review_findings`。
-6. 评论写回 GitHub 继续算 Step 9D，不放进 Agent 第一版。
+1. 固定一组 PR fixture 和 bad case：漏报、误报、该调的工具没调、读了不该读的文件、findings 解析失败。每条记下期望的工具序列。
+2. 指标至少包括：任务是否完成、工具选择是否正确、参数是否正确、延迟、token 数。和同一 PR 的 pack 路径对比。
+3. 把 Day 1 的打印换成可查询事件：模型请求、工具名、参数、错误、耗时。事件先写 worker 日志；要按请求串起来时，用 OpenTelemetry 的 trace / span 打在 FastAPI 和这次 agent 调用上。10F 那种完整监控仍不做。
+4. Guardrails：轮次上限、工具参数越界、输出解析失败时 job 记 `error_message`，不写入半截脏 findings。
+5. 对话变长时做一次压缩实验：留下系统提示、当前任务、已读路径摘要和最近几轮，不把每一份全文永远堆在 `messages` 里。压缩前后各跑同一条 fixture。
+6. 对话 UI 放在「flag 打开时能稳定写出 findings」之后。页面读的仍是 `review_findings`。
+7. 评论写回 GitHub 继续算 Step 9D，不放进这一天。
 
 状态：未开始
 
-## Day 9 之后：有兴趣再学
+## Day 9 之后：必须学到的技术
 
-这些不插进 Day 3，也不替代现成的 OpenRouter 模型。Day 9 的 bad case 积累够了再碰。
+Day 5–9 继续用手写循环和现成 OpenRouter 模型，数据库仍是 Postgres。下面这些要做进实验，不替换 Celery 主线，也不另开电商 demo。多 Agent 本身在 Day 6 和 Day 7。
 
-### 单轮锁定工具
+顺序：
 
-Chat Completions 的 `tool_choice` 可以在某一轮指定函数名，而不是 `auto`。用户明确要求刷新、而这次调用必须打到 GitHub 时，可以把这一轮锁成 `refresh_file_content`。模型这时不能只写正文就结束。平时保持 `auto`，否则模型失去自己选工具的机会。
+1. **混合检索。** 用 Day 9 里「import 和文本搜索都找不到相关文件」的 bad case 作为查询集。先做一层 BM25，再加稠密向量，用 Qdrant 做 hybrid query，然后 rerank，只把前几名交给 `search_code` 的调用方。算 Recall@K。索引的是仓库代码，不是把 review 全文再存进业务库。Lockfile、图片和已读文件仍然丢掉。
+2. **工具太多时的检索。** 工具 schema 多到十几二十个、模型经常选错时，先选出和这句话相关的几个 schema，再交给主模型。这和上一条选源码不是同一件事。
+3. **LangChain 与 LangGraph。** 用 LangChain 把现有读工具包成 `@tool`，用 LangGraph 把 Day 3 的 state、循环和 checkpoint 重写成一张图，对照手写 runtime 和 Day 8 的 Celery 入口。实验放在 `backend/agent_experiments/`，生产依赖不加入 LangChain。同时用 OpenAI Agents SDK 做一版同样的 review loop，写下框架多管了 agent loop、state 和 handoff 里的哪几项。
+4. **QLoRA / SFT，然后 DPO。** 用 Day 9 修正过的 findings 和正确的 tool call 轨迹，在开放权重模型上做 SFT。样本先积累到数百条。格式稳定后，把采纳的 finding 和误报配成偏好对做 DPO。PPO 那种完整 RLHF 只记录为什么贵、为什么不做。免费 OpenRouter 模型没有可训练权重，这一步要换基座或使用厂商的 fine-tuning 接口。
+5. **MCP。** 把 Day 2–4 的只读工具包成 MCP Server，让另一个 Host 调用。写 GitHub 仍是 Step 9D。
+6. **记忆分层。** 短对话状态放 Redis，可恢复的 `messages`、已读路径和 job 状态留在 Postgres。语义记忆就是上面的向量索引，不另做第三套用户档案。
+7. **产品面。** 同一 runtime 上做：对着一个 PR 提问、变更摘要、finding 分诊、影响面。安全聚焦已经在 Day 6。自动改代码、自己开 PR 不做。
+8. **面试用的系统设计与算法。** 不改产品技术栈。用现有 Postgres 讲清索引、事务和并发；用现有 Redis 讲清缓存击穿和一致性；用现有 RabbitMQ / Celery 讲清 ack、重试、重复投递和 active job 幂等。另外单独练系统设计题和算法题，不阻塞 Day 5。
 
-### 工具变多之后再检索
-
-现在只有几个工具，全部放进请求。工具多到十几二十个、模型经常选错时，再加一层检索：先选出和这句话相关的几个 schema，再交给主模型。这不是 Day 3 的问题。
-
-### Planner 与执行分开
-
-Day 5 已经是这件事：规划者先写出要读哪些文件、要不要重读，执行循环再按计划调工具。不要在 Day 3 再套一个总指挥模型。
-
-### 微调（SFT）
-
-微调是在一个现成基座模型上，用你自己的例子再训练一小段。不是从零写模型。数据是线上选错工具的 bad case：用户问题、当时该调用的工具和参数、不该调用的情况。训练结果是原模型的一个新版本。
-
-OpenRouter 上现在用的免费模型一般不把权重交给你训。要做的话，换一个开放权重的模型，或使用厂商的 fine-tuning 接口。Day 9 先把选错的次数和输入输出记下来，那些记录以后就是训练集。在那之前，工具说明、执行器拒绝错误调用、以及换一个函数调用更稳的现成模型，都比微调便宜。
+明确不采纳：用商品搜索和优惠券替换 CodeGuard 的工具；把数据库改成 MySQL；在 Day 5 之前用框架重写循环；在 Day 4 就上向量库；为了面试重做一条队列。
 
 状态：未排期
 
@@ -263,15 +263,15 @@ OpenRouter 上现在用的免费模型一般不把权重交给你训。要做的
 
 | 天 | 交付 | 碰生产代码 |
 |---|---|---|
-| Day 1 | mock 工具 + 手写循环 + trace | 否 |
-| Day 2 | 三个真工具 + `ReviewFindingDraft` | 否，只调用现有 service |
-| Day 3 | state 与 checkpoint | 否 |
-| Day 4 | import 跟随与文本搜索 | 否 |
+| Day 1 | mock 工具 + 手写循环 + trace | 否。实验已跑通 |
+| Day 2 | 三个真工具 + `ReviewFindingDraft` | 否。实验已跑通 |
+| Day 3 | state 与 checkpoint | 否。实验已跑通 |
+| Day 4 | import 跟随与文本搜索 | 否。实验已跑通 |
 | Day 5 | review plan | 否 |
-| Day 6 | 安全 / 缺陷 / 性能作为工具 | 否 |
-| Day 7 | handoff 对比，选定默认编排 | 否 |
+| Day 6 | 编排者、三位专家、汇总者协作 | 否 |
+| Day 7 | handoff：专家接管后续工具调用 | 否 |
 | Day 8 | feature flag 挂进 `execute_review_job` | 是 |
-| Day 9+ | fixture、trace、guardrails、成本；然后才是对话 UI | 按需 |
-| Day 9 之后 | 单轮锁定 `tool_choice`、工具检索、SFT | 按需 |
+| Day 9 | fixture、指标、OpenTelemetry、上下文压缩 | 按需 |
+| Day 9 之后 | Qdrant 混合检索与 rerank、工具检索、LangChain / LangGraph / Agents SDK、SFT、DPO、MCP、记忆分层、Ask / 分诊 | 实验目录。主线仍是 Celery |
 
-下面这些不出现在 Day 1，各自留在上表对应的那一天：LangChain、LangGraph、OpenAI Agents SDK、多 Agent、向量库、长期记忆、MCP、Planner 框架、webhook 改走 agent、自动 GitHub 评论、把 Celery 换成 Taskiq。SFT 和工具检索放在 Day 9 之后。
+Day 1 不做 LangChain、LangGraph、Agents SDK、向量库、长期记忆、MCP、自动 GitHub 评论，也不换 Taskiq。多 Agent 在 Day 6 和 Day 7。框架、混合检索和微调在 Day 9 之后，都要做进实验。

@@ -150,8 +150,11 @@ def test_openrouter_parses_fenced_json_aliases_and_line_ranges():
 
 
 def test_openrouter_review_content_rejects_empty_and_accepts_object_content():
+    sent: dict = {}
+
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json_body(request)
+        sent.update(payload)
         if payload["messages"][1]["content"] == "empty":
             return httpx.Response(
                 200,
@@ -192,6 +195,8 @@ def test_openrouter_review_content_rejects_empty_and_accepts_object_content():
     assert parsed.summary == "ok"
     assert parsed.findings == []
     assert provider.model_name == "openrouter/free"
+    assert sent["max_tokens"] == 8129
+    assert sent["reasoning"] == {"effort": "medium"}
 
 
 def test_openrouter_review_content_explains_provider_error_bodies():
