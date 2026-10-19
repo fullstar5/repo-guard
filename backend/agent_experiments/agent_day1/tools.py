@@ -1,4 +1,3 @@
-import json
 from collections.abc import Callable
 
 
@@ -67,26 +66,6 @@ def execute_tool(name:str, arguments: dict[str, object]) -> dict[str, object]:
         return {"error": "repo must be a string and pr_number must be an integer."}
 
     return function(repo=repo, pr_number=pr_number)
-
-
-
-def parse_tool_arguments(raw_arguments: object) -> dict[str, object]:
-    """Parse a tool call's arguments field.
-    Args:
-        raw_arguments: JSON string from Chat Completions, or a dict a provider already parsed.
-    Returns:
-        An arguments object.
-    Raises:
-        json.JSONDecodeError: The string is not JSON.
-        TypeError: The value is not an object.
-    """
-    if isinstance(raw_arguments, str):
-        parsed = json.loads(raw_arguments)
-    else:
-        parsed = raw_arguments
-    if not isinstance(parsed, dict):
-        raise TypeError("Tool arguments must be a JSON object.")
-    return parsed
 
 
 

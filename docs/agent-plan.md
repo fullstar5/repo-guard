@@ -4,7 +4,7 @@
 
 把现有的一次性 review 变成：模型自己决定还缺什么信息，调用 CodeGuard 已有的读函数，再写出与现在相同的 findings。
 
-状态：Day 1–4 的实验已经跑通。产品 review 仍是下面这条没有 tools 的 pack 路径。下一步是 Day 5。
+状态：Day 1–6 的实验已经跑通。产品 review 仍是下面这条没有 tools 的 pack 路径。Day 7 不实现。下一步是把 Day 6 同一轮里的读文件和专家调用改成并行，然后进入 Day 8。
 
 ## 现在的 review 在做什么
 
@@ -148,6 +148,8 @@ Day 1 的 mock 可以暂时用 `repo` + `pr_number`。这个参数形状只存�
 
 ## Day 5：Review Planner
 
+位置：`backend/agent_experiments/agent_day5/`。实验仍调用 Day 4 的 `get_file_content`，还不改成生产里的 hunk 窗口打包。
+
 目的：先决定审什么、按什么策略审，再进入分析。
 
 步骤：
@@ -159,42 +161,51 @@ Day 1 的 mock 可以暂时用 `repo` + `pr_number`。这个参数形状只存�
 
 成功标准：一个含 README、lockfile、组件、认证和支付文件的 PR 里，README 与 lockfile 标成 ignore，认证和支付标成 carefully，组件标成 inspect。plan 出现在 trace 里。
 
-状态：未开始
+状态：实验已跑通。PR #31 上 README 与文档为 ignore，代码为 inspect；该 PR 没有认证或支付文件，所以没有出现 inspect_carefully。产品路径未改。
 
 ## Day 6：多 Agent 协作（编排者调用专家）
 
-目的：同一次 review 里有多个 Agent。编排者决定叫谁，专家各自审查自己的那一片上下文，汇总者把多份 findings 合成一份。
+位置：`backend/agent_experiments/agent_day6/`。编排者沿用 Day 5 的计划和读取。专家没有读文件工具。
 
-这是 agents as tools，但是每一次调用都是一次独立的模型对话，不是编排者自己把三个角度写完。
+目的：同一次 review 里有多个 Agent。编排者决定叫谁，专家各自审查自己的那一片上下文，汇总只合并他们已经写出的 findings。
+
+这是 agents as tools。每一次专家调用都是一次独立的模型对话，不是编排者自己把各个角度写完。
 
 角色：
 
 | Agent | 做什么 | 不做什么 |
 |---|---|---|
-| 编排者 | 读 Day 5 的 plan。认证相关交给安全专家，空值和逻辑交给缺陷专家，热路径交给性能专家。可以同时叫多个 | 不自己产出最终 findings。不把 GitHub token 交给专家 |
-| 安全专家 | 只看分给它的 diff 和 Day 4 取回的相关文件。查认证、授权、注入、密钥、XSS、CSRF、越权 | 不能调用读文件工具，不能扩大范围 |
-| 缺陷专家 | 同一类输入。查空值、边界、错误状态、竞态、逻辑错误 | 同上 |
-| 性能专家 | 同一类输入。查 N+1、多余请求、过重循环、不必要的重渲染、可缓存点 | 同上 |
-| 汇总者 | 收齐专家的 `ReviewFindingDraft`。同一文件、同一行、同一问题的多条合成一条，按 severity 排序 | 不新增专家没写过的问题 |
+| 编排者 | 读 Day 5 的 plan，再按风险把已读文件派给一位或多位专家 | 不自己产出最终 findings。不把 GitHub token 交给专家 |
+| 安全专家 | 认证、授权、注入、XSS、CSRF、SSRF、路径穿越、密钥、加密、敏感数据暴露 | 不能调用读文件工具，不能扩大范围 |
+| 正确性专家 | 逻辑、空值、错误处理、状态、并发、边界 | 同上 |
+| 性能专家 | N+1、无界读取、热路径阻塞、重复的昂贵调用 | 同上 |
+| 可靠性专家 | 超时、重试、幂等、部分失败、事务、资源泄漏 | 同上 |
+| 契约专家 | API 形状、校验、迁移、事件和已存数据的兼容 | 同上 |
+| 变更风险专家 | 只改了一处的重复规则、与行为矛盾的命名或分支 | 不报格式和命名偏好 |
+| 汇总 | 同一文件、同一行、同一问题的多条合成一条，按 severity 排序 | 不新增专家没写过的问题。汇总是代码，不再叫一次模型 |
 
-每个专家有自己的 system prompt 和自己的 `messages`。输入是编排者打包的一小段上下文，不是整段编排对话。输出仍是 `ReviewFindingDraft`。现有表没有 `category` 列；关注点写进 `summary`。
+每个专家有自己的 system prompt 和自己的 `messages`。输入是编排者点名的已读文件，不是整段编排对话。输出仍是 `ReviewFindingDraft`。现有表没有 `category` 列；关注点写进 `summary`。
 
-成功标准：认证改动至少叫到安全专家；热路径或循环至少叫到性能专家。trace 里能看到编排者的分发、每一家专家的单独回复、以及汇总后的一份 findings。专家没被分到的文件不出现在它的输入里。
+成功标准：认证或外部输入至少叫到安全专家；查询循环或热路径至少叫到性能专家。trace 里能看到编排者的分发、每一家专家的单独回复、以及汇总后的一份 findings。专家没被分到的文件不出现在它的输入里。
 
-状态：未开始
+状态：实验已跑通。PR #31 上叫到安全、正确性、性能、可靠性；契约和变更风险未叫。汇总出 14 条 findings。正确性与可靠性对 Day 1 过窄 `except` 的两条相近 finding 没有合成。同一轮里的读文件和专家调用已改为并行；模型若仍每轮只发一个调用，等待时间不会下降。产品路径未改。
 
 ## Day 7：换一种协作（handoff）
 
-目的：Day 6 是编排者始终拿着对话和读文件工具。这一天实验另一种协作：分诊之后，把后续工作整个交给一个专家。
+位置：`backend/agent_experiments/agent_day7/`。只做实验，不改 Celery worker。
+
+目的：Day 6 是编排者始终拿着对话和读文件工具，专家只交回 findings。这一天实验另一种协作：分诊之后，把后续轮次整个交给一个专家。
 
 - **Day 6：** 编排者调用专家，专家只返回 findings，然后回到编排者。
 - **Handoff：** 分诊 Agent 选定一个专家后，该专家接管工具调用和后续轮次，直到它写出 findings。编排者不再插嘴。
 
-同一个 PR 两种都跑。记录谁丢了上下文、谁重复读文件、findings 能否解析、轮次和耗时。
+实现时分诊仍先交出 Day 5 的 plan，并选定一位专家和起始路径。之后 Python 换成该专家的 system prompt 和一份新的 `messages`，工具仍是现有的读文件工具。`user_id` 和 `pull_request_id` 继续由 Python 绑定，模型不能自己传 token 或仓库。专家循环直到写出可解析的 findings，或用完轮次。
 
-成功标准：笔记写明 CodeGuard 默认用 Day 6。Handoff 留在 `backend/agent_experiments/`。默认用 Day 6，是因为读文件的权限必须留在绑定了 `user_id` 和 `pull_request_id` 的编排者手里。这一天不改 worker。
+同一个 PR 再留一份 Day 6 的结果。笔记记下谁丢了上下文、谁重复读文件、findings 能否解析、轮次和耗时。
 
-状态：未开始
+成功标准：笔记写明 CodeGuard 默认用 Day 6。Handoff 留在 `backend/agent_experiments/`。默认用 Day 6，是因为读文件的权限必须留在绑定了 `user_id` 和 `pull_request_id` 的运行时手里，不把 token 放进模型可见的参数。这一天不改 worker。
+
+状态：不实现。流程留在本节作对照。产品默认 Day 6：一次审核要同时覆盖多个风险，读文件权留在编排者手里。Handoff 只剩一个专家视角，不适合作为默认。
 
 ## Day 8：挂进现有 Celery
 
@@ -267,11 +278,11 @@ Day 5–9 继续用手写循环和现成 OpenRouter 模型，数据库仍是 Pos
 | Day 2 | 三个真工具 + `ReviewFindingDraft` | 否。实验已跑通 |
 | Day 3 | state 与 checkpoint | 否。实验已跑通 |
 | Day 4 | import 跟随与文本搜索 | 否。实验已跑通 |
-| Day 5 | review plan | 否 |
-| Day 6 | 编排者、三位专家、汇总者协作 | 否 |
-| Day 7 | handoff：专家接管后续工具调用 | 否 |
+| Day 5 | review plan | 否。实验已跑通 |
+| Day 6 | 编排者、六位专家、代码汇总协作 | 否。实验已跑通 |
+| Day 7 | handoff 流程仅作对照，不实现 | 否 |
 | Day 8 | feature flag 挂进 `execute_review_job` | 是 |
 | Day 9 | fixture、指标、OpenTelemetry、上下文压缩 | 按需 |
 | Day 9 之后 | Qdrant 混合检索与 rerank、工具检索、LangChain / LangGraph / Agents SDK、SFT、DPO、MCP、记忆分层、Ask / 分诊 | 实验目录。主线仍是 Celery |
 
-Day 1 不做 LangChain、LangGraph、Agents SDK、向量库、长期记忆、MCP、自动 GitHub 评论，也不换 Taskiq。多 Agent 在 Day 6 和 Day 7。框架、混合检索和微调在 Day 9 之后，都要做进实验。
+Day 1 不做 LangChain、LangGraph、Agents SDK、向量库、长期记忆、MCP、自动 GitHub 评论，也不换 Taskiq。多 Agent 用 Day 6。Day 7 的 handoff 不实现。框架、混合检索和微调在 Day 9 之后，都要做进实验。
