@@ -2,9 +2,9 @@
 
 from datetime import datetime
 
-from app.core.config import REVIEW_MODEL_ALLOWLIST
+from app.core.config import AGENT_REVIEW_MODELS, REVIEW_MODEL_ALLOWLIST
 from app.schemas.review_finding import ReviewFindingRead
-from pydantic import BaseModel, ConfigDict, Field, field_validator  # pyright: ignore[reportMissingImports]
+from pydantic import BaseModel, ConfigDict, Field, model_validator  # pyright: ignore[reportMissingImports]
 
 
 class CreateReviewJobRequest(BaseModel):
@@ -12,26 +12,29 @@ class CreateReviewJobRequest(BaseModel):
     model_name: str = "openrouter/free"
     use_agent: bool = False
 
-    @field_validator("model_name")
-    @classmethod
-    def model_name_must_be_allowed(cls, value: str) -> str:
-        """Reject model ids that are not on the manual-review allowlist.
+    @model_validator(mode="after")
+    def model_matches_review_method(self) -> "CreateReviewJobRequest":
+        """Reject a model that the selected review method cannot call.
 
-        Args:
-            value: ``model_name`` from the create-job request.
+        Agent jobs may only use models that return tool calls. Workflow jobs
+        use the wider manual-review allowlist.
 
         Returns:
-            The same id when it is allowed.
+            This request when the model is allowed.
 
         Raises:
-            ValueError: The id is not in ``REVIEW_MODEL_ALLOWLIST``. FastAPI
-            turns that into HTTP 422.
+            ValueError: The model is outside the list for ``use_agent``.
+            FastAPI turns that into HTTP 422.
         """
-        # ADDED: reject ids that are not on the OpenRouter allowlist.
-        if value not in REVIEW_MODEL_ALLOWLIST:
-            allowed = ", ".join(REVIEW_MODEL_ALLOWLIST)
-            raise ValueError(f"model_name must be one of: {allowed}")
-        return value
+        if self.use_agent:
+            allowed = AGENT_REVIEW_MODELS
+            label = "agent model_name"
+        else:
+            allowed = REVIEW_MODEL_ALLOWLIST
+            label = "model_name"
+        if self.model_name not in allowed:
+            raise ValueError(f"{label} must be one of: {', '.join(allowed)}")
+        return self
 
 
 class ReviewJobRead(BaseModel):
@@ -62,4 +65,5 @@ class ReviewModelListResponse(BaseModel):
 
     models: list[str]
     default_model: str
+    agent_models: list[str]
     agent_default_model: str

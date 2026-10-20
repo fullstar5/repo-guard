@@ -1,6 +1,6 @@
 from app.api.deps import get_current_user, get_db
 from app.api.rate_limit_deps import limit_review_creation
-from app.core.config import AGENT_REVIEW_MODEL, REVIEW_MODEL_ALLOWLIST, get_settings
+from app.core.config import AGENT_REVIEW_MODELS, REVIEW_MODEL_ALLOWLIST, get_settings
 from app.models.review_job import ReviewJobStatus
 from app.models.user import User
 from app.schemas.review_job import (
@@ -41,7 +41,8 @@ async def list_review_models(
     return ReviewModelListResponse(
         models=list(REVIEW_MODEL_ALLOWLIST),
         default_model=default_model,
-        agent_default_model=AGENT_REVIEW_MODEL,
+        agent_models=list(AGENT_REVIEW_MODELS),
+        agent_default_model=AGENT_REVIEW_MODELS[0],
     )
 
 

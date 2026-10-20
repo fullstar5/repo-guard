@@ -79,45 +79,16 @@ GET_FILE_CONTENT_DESCRIPTION = (
 )
 
 
-def _day3_tools() -> list[dict[str, object]]:
-    """Return Day 2 tools with a Day 3 description for reading a file.
-
-    Returns:
-        Tool schemas sent to the model, including ``refresh_file_content``.
-    """
-    tools: list[dict[str, object]] = []
-    for tool in DAY2_TOOLS:
-        function = tool.get("function")
-        if isinstance(function, dict) and function.get("name") == "get_file_content":
-            tools.append({**tool, "function": {**function, "description": GET_FILE_CONTENT_DESCRIPTION}})
-        else:
-            tools.append(tool)
-    tools.append(REFRESH_FILE_CONTENT)
-    return tools
-
-
-DAY3_TOOLS = _day3_tools()
-
-
-def _summary(name: str, arguments: dict[str, object], result: dict[str, object], cached: bool) -> dict[str, object]:
-    """Keep a short record of one tool call.
-    Args:
-        name: Tool name.
-        arguments: Parsed arguments.
-        result: Tool payload.
-        cached: True when the file body was served from memory.
-    Returns:
-        A summary without the file body.
-    """
-    path = arguments.get("path")
-    return {
-        "name": name,
-        "path": path if isinstance(path, str) else None,
-        "cached": cached,
-        "error": result.get("error"),
-        "note": result.get("note"),
-        "file_count": result.get("file_count"),
-    }
+DAY3_TOOLS: list[dict[str, object]] = []
+for tool in DAY2_TOOLS:
+    function = tool.get("function")
+    if isinstance(function, dict) and function.get("name") == "get_file_content":
+        DAY3_TOOLS.append(
+            {**tool, "function": {**function, "description": GET_FILE_CONTENT_DESCRIPTION}}
+        )
+    else:
+        DAY3_TOOLS.append(tool)
+DAY3_TOOLS.append(REFRESH_FILE_CONTENT)
 
 
 async def _execute(
@@ -235,8 +206,17 @@ async def run_agent(
                     result = {"error": f"{type(exc).__name__}: {exc}"}
                     cached = False
 
+                path = arguments.get("path")
                 state.tool_summaries.append(
-                    {"round": state.round_index, **_summary(name, arguments, result, cached)}
+                    {
+                        "round": state.round_index,
+                        "name": name,
+                        "path": path if isinstance(path, str) else None,
+                        "cached": cached,
+                        "error": result.get("error"),
+                        "note": result.get("note"),
+                        "file_count": result.get("file_count"),
+                    }
                 )
                 print("LLM:")
                 print(f"Tool Call -> {name}")

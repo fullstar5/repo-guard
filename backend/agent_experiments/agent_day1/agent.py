@@ -81,27 +81,6 @@ async def _call_llm(
     return message
 
 
-def _assistant_turn(message: dict[str, object]) -> dict[str, object]:
-    """Copy the assistant message that must be replayed before tool results.
-
-    Args:
-        message: Assistant message from OpenRouter.
-
-    Returns:
-        Role, content, and tool calls. Reasoning details are kept when present
-        because OpenRouter expects them on the next request.
-    """
-    turn: dict[str, object] = {
-        "role": "assistant",
-        "content": message.get("content"),
-        "tool_calls": message.get("tool_calls") or [],
-    }
-    reasoning_details = message.get("reasoning_details")
-    if reasoning_details is not None:
-        turn["reasoning_details"] = reasoning_details
-    return turn
-
-
 async def run_agent(user_text: str) -> str:
     """Run the tool loop until the model answers or the round limit is hit.
 
@@ -134,7 +113,15 @@ async def run_agent(user_text: str) -> str:
                 _print_block("FINAL", final_text or "(empty content)")
                 return final_text
 
-            messages.append(_assistant_turn(message))
+            turn: dict[str, object] = {
+                "role": "assistant",
+                "content": message.get("content"),
+                "tool_calls": message.get("tool_calls") or [],
+            }
+            reasoning_details = message.get("reasoning_details")
+            if reasoning_details is not None:
+                turn["reasoning_details"] = reasoning_details
+            messages.append(turn)
             for tool_call in tool_calls:
                 if not isinstance(tool_call, dict):
                     continue

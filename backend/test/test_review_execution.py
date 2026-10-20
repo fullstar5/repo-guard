@@ -570,6 +570,8 @@ def test_agent_review_stores_pack_count_and_file_cache():
                     "suggestion": "remove the log",
                 }
             ],
+            "windows": [["a.py", "A" * 200], ["b.py", "B" * 200]],
+            "fetch_notes": [],
         }
     )
 
@@ -628,9 +630,7 @@ def test_agent_review_stores_pack_count_and_file_cache():
     assert saved.result_summary == "agent summary"
     assert saved.total_chunks == 2
     assert saved.error_message is None
-    assert set(cached) == {"a.py", "b.py"}
-    assert cached["a.py"]["windows"]
-    assert cached["b.py"]["source_text"]["text"] == "beta\n"
+    assert cached == {}
     stored = [call.args[0] for call in write_db.add.call_args_list]
     assert stored[0].summary == "token is logged"
     assert stored[0].file_path == "a.py"
@@ -686,7 +686,12 @@ def test_agent_review_reuses_cached_windows_without_github():
             patch(
                 "agent_experiments.agent_day6.agent.run_agent",
                 new=AsyncMock(
-                    return_value={"finished": True, "summary": "cached", "findings": []}
+                    return_value={
+                        "finished": True,
+                        "summary": "cached",
+                        "findings": [],
+                        "windows": [["a.py", "File: a.py\n" + ("x" * 200)]],
+                    }
                 ),
             ),
         ):

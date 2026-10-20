@@ -94,46 +94,22 @@ SEARCH_CODE: dict[str, object] = {
 }
 
 
-def _day4_tools() -> list[dict[str, object]]:
-    """Add Day 4 tools to the Day 2 schemas.
-
-    Returns:
-        Tool schemas for this experiment.
-    """
-    description = (
-        "Read one repository file needed to review the selected pull request. "
-        "Changed files include their patch. A file that was not changed is loaded "
-        "from the pull request head as context. "
-        "If this review already read the path, the saved body is returned."
-    )
-    tools: list[dict[str, object]] = []
-    for tool in DAY2_TOOLS:
-        function = tool.get("function")
-        if isinstance(function, dict) and function.get("name") == "get_file_content":
-            tools.append({**tool, "function": {**function, "description": description}})
-        else:
-            tools.append(tool)
-    tools.extend([REFRESH_FILE_CONTENT, GET_RELATED_FILES, SEARCH_CODE])
-    return tools
-
-
-DAY4_TOOLS = _day4_tools()
-
-
-def _saved_text(saved: dict[str, object]) -> str:
-    """Read patch or source text out of a stored file result.
-
-    Args:
-        saved: One value from ``read_files``.
-
-    Returns:
-        The best available text, or an empty string.
-    """
-    for key in ("source_text", "patch"):
-        body = saved.get(key)
-        if isinstance(body, dict) and isinstance(body.get("text"), str):
-            return body["text"]
-    return ""
+_FILE_CONTENT_DESCRIPTION = (
+    "Read one repository file needed to review the selected pull request. "
+    "Changed files include their patch. A file that was not changed is loaded "
+    "from the pull request head as context. "
+    "If this review already read the path, the saved body is returned."
+)
+DAY4_TOOLS: list[dict[str, object]] = []
+for tool in DAY2_TOOLS:
+    function = tool.get("function")
+    if isinstance(function, dict) and function.get("name") == "get_file_content":
+        DAY4_TOOLS.append(
+            {**tool, "function": {**function, "description": _FILE_CONTENT_DESCRIPTION}}
+        )
+    else:
+        DAY4_TOOLS.append(tool)
+DAY4_TOOLS.extend([REFRESH_FILE_CONTENT, GET_RELATED_FILES, SEARCH_CODE])
 
 
 class Day4Tools:
@@ -261,7 +237,13 @@ class Day4Tools:
         saved = state.read_files.get(path)
         if not isinstance(saved, dict):
             return {"error": f"Call get_file_content for {path} before asking for related files."}
-        paths = related_paths(path, _saved_text(saved), set(state.read_files))
+        saved_text = ""
+        for key in ("source_text", "patch"):
+            body = saved.get(key)
+            if isinstance(body, dict) and isinstance(body.get("text"), str):
+                saved_text = body["text"]
+                break
+        paths = related_paths(path, saved_text, set(state.read_files))
         return {"path": path, "related": paths, "truncated": len(paths) >= 10}
 
     async def search_code(self, query: str) -> dict[str, object]:
@@ -279,28 +261,6 @@ class Day4Tools:
         if isinstance(files, dict):
             return files
         return search_hits([(item.filename, item.patch) for item in files], query.strip())
-
-
-def _summary(name: str, arguments: dict[str, object], result: dict[str, object], cached: bool) -> dict[str, object]:
-    """Keep a short record of one tool call.
-
-    Args:
-        name: Tool name.
-        arguments: Parsed arguments.
-        result: Tool payload.
-        cached: True when a saved file body was reused.
-
-    Returns:
-        A summary without the file body.
-    """
-    target = arguments.get("path") or arguments.get("query")
-    return {
-        "name": name,
-        "path": target if isinstance(target, str) else None,
-        "cached": cached,
-        "error": result.get("error"),
-        "note": result.get("note"),
-    }
 
 
 async def _execute(
@@ -432,8 +392,16 @@ async def run_agent(user_text: str, *, resume: bool) -> str:
                         "content": json.dumps(result, ensure_ascii=False),
                     }
                 )
+                target = arguments.get("path") or arguments.get("query")
                 state.tool_summaries.append(
-                    {"round": state.round_index, **_summary(name, arguments, result, cached)}
+                    {
+                        "round": state.round_index,
+                        "name": name,
+                        "path": target if isinstance(target, str) else None,
+                        "cached": cached,
+                        "error": result.get("error"),
+                        "note": result.get("note"),
+                    }
                 )
             state.save()
     _print_block("FINAL", f"Stopped after {MAX_ROUNDS} rounds.")

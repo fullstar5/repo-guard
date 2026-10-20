@@ -35,20 +35,6 @@ def parse_tool_arguments(raw_arguments: object) -> dict[str, object]:
     return parsed
 
 
-def _text_field(text: str | None) -> dict[str, object] | None:
-    """Wrap one full text field for a tool result.
-
-    Args:
-        text: Patch or source text, or None when GitHub has no body.
-
-    Returns:
-        The full text, or None. Nothing is cut off.
-    """
-    if text is None:
-        return None
-    return {"text": text, "truncated": False}
-
-
 @dataclass(frozen=True)
 class FileSnapshot:
     """Plain copy of one synced file, safe to use after the session closes."""
@@ -362,7 +348,7 @@ class BoundReviewTools:
         payload: dict[str, object] = {
             "path": path,
             "status": status,
-            "patch": _text_field(patch),
+            "patch": None if patch is None else {"text": patch, "truncated": False},
         }
         if status == "removed":
             payload["source_text"] = None
@@ -389,5 +375,7 @@ class BoundReviewTools:
             payload["note"] = str(exc)
             return payload
 
-        payload["source_text"] = _text_field(source_text)
+        payload["source_text"] = (
+            None if source_text is None else {"text": source_text, "truncated": False}
+        )
         return payload

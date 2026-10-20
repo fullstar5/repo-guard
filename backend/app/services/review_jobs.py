@@ -508,9 +508,9 @@ async def _complete_agent_review(
 ) -> ReviewJob:
     """Run the Day 6 review agent and store its findings on the job.
 
-    Reviewable files are split with the same window packer as the workflow.
-    ``total_chunks`` is that pack count. File bodies are stored in Redis for
-    this job id; the experiment checkpoint file is not written.
+    The agent plans from the file list, then reads only the files it marked
+    for inspection. ``total_chunks`` is the pack count of those reads.
+    File bodies are stored in Redis for this job id.
 
     Args:
         job_id: Local review job id.
@@ -531,31 +531,13 @@ async def _complete_agent_review(
     from agent_experiments.agent_day6.agent import run_agent
 
     file_cache = ReviewFileCache(http_client, job_id)
-    windows, fetch_notes = await _load_review_windows(
-        pr_files=pr_files,
-        http_client=http_client,
-        owner_id=owner_id,
-        owner_login=owner_login,
-        repo_name=repo_name,
-        file_cache=file_cache,
-    )
-    if not windows:
-        raise ValueError("No reviewable patch content found for this pull request.")
-    packs = pack_review_windows(
-        windows,
-        max_chars=settings.review_pack_max_chars,
-    )
     logger.info(
-        "Review job %s agent packed %s window(s) into %s pack(s)",
-        job_id,
-        len(windows),
-        len(packs),
-    )
-    logger.info(
-        "Review job %s starting agent runtime pull_request_id=%s user_id=%s model=%s",
+        "Review job %s starting agent runtime pull_request_id=%s user_id=%s repo=%s/%s model=%s",
         job_id,
         pull_request_id,
         owner_id,
+        owner_login,
+        repo_name,
         model_name,
     )
     merged = await run_agent(
@@ -571,6 +553,28 @@ async def _complete_agent_review(
         raise ValueError(
             "Agent stopped before finish_review. The review was not completed."
         )
+    windows: list[tuple[str, str]] = []
+    raw_windows = merged.get("windows")
+    if isinstance(raw_windows, list):
+        for item in raw_windows:
+            if (
+                isinstance(item, (list, tuple))
+                and len(item) == 2
+                and isinstance(item[0], str)
+                and isinstance(item[1], str)
+            ):
+                windows.append((item[0], item[1]))
+    packs = pack_review_windows(windows, max_chars=settings.review_pack_max_chars)
+    raw_notes = merged.get("fetch_notes")
+    fetch_notes = [
+        note for note in raw_notes if isinstance(note, str)
+    ] if isinstance(raw_notes, list) else []
+    logger.info(
+        "Review job %s agent packed %s read window(s) into %s pack(s)",
+        job_id,
+        len(windows),
+        len(packs),
+    )
     raw_findings = merged.get("findings")
     findings: list[ReviewFindingDraft] = []
     if isinstance(raw_findings, list):
