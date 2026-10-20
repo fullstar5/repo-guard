@@ -246,6 +246,7 @@ export default function PullRequestReviewPage() {
           <label className="flex items-center gap-2 text-sm text-[#a1a1aa]">
             <span className="sr-only">Review model</span>
             <select
+              key={useAgent ? "agent-models" : "workflow-models"}
               value={selectedModel}
               onChange={(event) => setModelName(event.target.value)}
               disabled={runDisabled}
