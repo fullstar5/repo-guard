@@ -530,6 +530,7 @@ def _review_job(job_id: int, status: ReviewJobStatus) -> ReviewJob:
         status=status,
         provider="openrouter",
         model_name="openrouter/free",
+        use_agent=False,
         total_files=1,
         total_chunks=0,
     )
