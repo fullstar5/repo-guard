@@ -11,8 +11,9 @@ from pydantic_settings import (  # pyright: ignore[reportMissingImports]
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 
-# ADDED: manual Run AI review may only use these ids. Webhook keeps
-# open_router_default_model and does not follow the browser selection.
+# Manual review may use the workflow allowlist. Webhook and the Agent
+# picker use AGENT_REVIEW_MODELS. open_router_default_model is the
+# workflow default shown by the model list.
 AGENT_REVIEW_MODELS: tuple[str, ...] = (
     "nvidia/nemotron-3.5-super-vl:free",
 )
