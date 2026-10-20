@@ -13,9 +13,11 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 
 # ADDED: manual Run AI review may only use these ids. Webhook keeps
 # open_router_default_model and does not follow the browser selection.
+AGENT_REVIEW_MODEL = "nvidia/nemotron-3.5-super-vl:free"
 REVIEW_MODEL_ALLOWLIST: tuple[str, ...] = (
     "openrouter/free",
     "nvidia/nemotron-3-ultra-550b-a55b:free",
+    AGENT_REVIEW_MODEL,
 )
 
 

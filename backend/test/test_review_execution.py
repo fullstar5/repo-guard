@@ -558,6 +558,7 @@ def test_agent_review_stores_pack_count_and_file_cache():
 
     agent = AsyncMock(
         return_value={
+            "finished": True,
             "summary": "agent summary",
             "findings": [
                 {
@@ -684,7 +685,9 @@ def test_agent_review_reuses_cached_windows_without_github():
             ),
             patch(
                 "agent_experiments.agent_day6.agent.run_agent",
-                new=AsyncMock(return_value={"summary": "cached", "findings": []}),
+                new=AsyncMock(
+                    return_value={"finished": True, "summary": "cached", "findings": []}
+                ),
             ),
         ):
             await execute_review_job(
@@ -697,6 +700,62 @@ def test_agent_review_reuses_cached_windows_without_github():
     fetch.assert_not_called()
     assert saved.total_chunks == 1
     assert saved.result_summary == "cached"
+
+
+def test_unfinished_agent_review_is_marked_failed():
+    review_job = _job(use_agent=True)
+    failed = _job(status=ReviewJobStatus.failed, use_agent=True)
+    read_db = AsyncMock()
+    read_db.get = AsyncMock(return_value=SimpleNamespace(id=10, repository_id=3))
+    repo_result = MagicMock()
+    repo_result.scalar_one.return_value = SimpleNamespace(
+        user=SimpleNamespace(id=7, github_access_token="token"),
+        owner_login="octo",
+        name="demo",
+    )
+    read_db.execute = AsyncMock(return_value=repo_result)
+
+    async def _cache_get(_self, path):
+        if path != "a.py":
+            return None
+        return {
+            "path": "a.py",
+            "windows": ["File: a.py\nprint(1)\n"],
+        }
+
+    async def _inner():
+        with (
+            patch(
+                "app.services.review_jobs.get_pull_request_files",
+                new=AsyncMock(return_value=[_file(5, "a.py")]),
+            ),
+            patch("app.services.review_jobs.ReviewFileCache.get", new=_cache_get),
+            patch("app.services.review_jobs.ReviewFileCache.put", new=AsyncMock()),
+            patch(
+                "agent_experiments.agent_day6.agent.run_agent",
+                new=AsyncMock(
+                    return_value={
+                        "finished": False,
+                        "summary": "No specialist reported an issue.",
+                        "findings": [],
+                    }
+                ),
+            ),
+            patch(
+                "app.services.review_jobs.mark_review_job_failed_by_id",
+                new=AsyncMock(return_value=failed),
+            ) as mark_failed,
+        ):
+            result = await execute_review_job(
+                db=read_db,
+                review_job=review_job,
+                http_client=AsyncMock(),
+            )
+        return result, mark_failed
+
+    result, mark_failed = asyncio.run(_inner())
+    assert result is failed
+    assert "finish_review" in mark_failed.await_args.args[1]
 
 
 def _ready_db(*, token: str | None = "token"):

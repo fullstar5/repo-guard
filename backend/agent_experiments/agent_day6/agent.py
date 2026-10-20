@@ -404,6 +404,7 @@ async def run_agent(
             if finished:
                 break
         merged = aggregate_findings(reports)
+        merged["finished"] = finished
         if save_checkpoint:
             state.save()
         _print_block("PLAN", plan)

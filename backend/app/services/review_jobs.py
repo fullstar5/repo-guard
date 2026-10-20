@@ -567,6 +567,10 @@ async def _complete_agent_review(
         save_checkpoint=False,
         file_cache=file_cache,
     )
+    if merged.get("finished") is not True:
+        raise ValueError(
+            "Agent stopped before finish_review. The review was not completed."
+        )
     raw_findings = merged.get("findings")
     findings: list[ReviewFindingDraft] = []
     if isinstance(raw_findings, list):

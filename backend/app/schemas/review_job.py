@@ -58,7 +58,8 @@ class ReviewJobListResponse(BaseModel):
 
 
 class ReviewModelListResponse(BaseModel):
-    """Models the browser may select. default_model is the webhook model."""
+    """Models the browser may select. default_model is the workflow model."""
 
     models: list[str]
     default_model: str
+    agent_default_model: str
