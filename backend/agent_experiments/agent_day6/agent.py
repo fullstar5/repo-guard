@@ -24,6 +24,7 @@ from agent_experiments.agent_day6.specialists import (
     slice_read_files,
     specialist_tools,
 )
+from app.core.config import get_settings
 from app.services.openrouter_provider import OpenRouterReviewProvider
 from app.services.review_file_cache import ReviewFileCache
 
@@ -310,7 +311,13 @@ async def run_agent(
     print()
     _print_block("USER", user_text)
 
-    timeout = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=30.0)
+    settings = get_settings()
+    timeout = httpx.Timeout(
+        connect=settings.openrouter_connect_timeout,
+        read=settings.openrouter_read_timeout,
+        write=30.0,
+        pool=30.0,
+    )
     async with httpx.AsyncClient(timeout=timeout) as client:
         tools = Day4Tools(
             BoundReviewTools(state.user_id, state.pull_request_id, client),
