@@ -528,6 +528,19 @@ async def _complete_agent_review(
     Raises:
         ValueError: The job row disappeared, or the pull request has no reviewable windows.
     """
+    import sys
+    from pathlib import Path
+
+    package_root = Path(__file__).resolve().parents[2]
+    if str(package_root) not in sys.path:
+        sys.path.insert(0, str(package_root))
+    agent_file = package_root / "agent_experiments" / "agent_day6" / "agent.py"
+    if not agent_file.is_file():
+        present = sorted(path.name for path in package_root.iterdir())
+        raise ModuleNotFoundError(
+            f"Agent runtime is not in this image at {agent_file}. "
+            f"{package_root} contains: {present}"
+        )
     from agent_experiments.agent_day6.agent import run_agent
 
     file_cache = ReviewFileCache(http_client, job_id)
