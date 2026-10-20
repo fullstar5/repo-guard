@@ -345,10 +345,44 @@ describe("pull request review pin", () => {
     ]);
     vi.mocked(listReviewJobs).mockResolvedValue([pinned, latest]);
     vi.mocked(listReviewModels).mockResolvedValue({
-      models: ["openrouter/free"],
+      models: [
+        "openrouter/free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "nvidia/nemotron-3.5-super-vl:free",
+      ],
       default_model: "openrouter/free",
+      agent_models: ["nvidia/nemotron-3.5-super-vl:free"],
+      agent_default_model: "nvidia/nemotron-3.5-super-vl:free",
     });
   }
+
+  it("defaults to agent and limits the model list to agent models", async () => {
+    nav.pathname = "/repositories/4/pull-requests/8";
+    nav.search = "tab=files";
+    ready();
+    renderPage(<PullRequestPage />);
+
+    const method = await screen.findByLabelText("Review method");
+    const model = await screen.findByLabelText("Review model");
+    expect(method).toHaveValue("agent");
+    expect(model).toHaveValue("nvidia/nemotron-3.5-super-vl:free");
+    expect(
+      Array.from(model.querySelectorAll("option")).map((option) => option.textContent),
+    ).toEqual(["Nemotron 3.5 Super"]);
+
+    fireEvent.change(method, { target: { value: "workflow" } });
+    const workflowModel = screen.getByLabelText("Review model");
+    expect(
+      Array.from(workflowModel.querySelectorAll("option")).map((option) => option.textContent),
+    ).toEqual(["Free router", "Nemotron 3 Ultra", "Nemotron 3.5 Super"]);
+
+    fireEvent.change(method, { target: { value: "agent" } });
+    const agentModel = screen.getByLabelText("Review model");
+    expect(agentModel).toHaveValue("nvidia/nemotron-3.5-super-vl:free");
+    expect(
+      Array.from(agentModel.querySelectorAll("option")).map((option) => option.textContent),
+    ).toEqual(["Nemotron 3.5 Super"]);
+  });
 
   it("shows the pinned job and removes the pin from other tab links", async () => {
     nav.pathname = "/repositories/4/pull-requests/8";
@@ -399,7 +433,11 @@ describe("pull request review pin", () => {
     expect(await screen.findAllByText("pinned finding")).not.toHaveLength(0);
     fireEvent.click(screen.getByRole("button", { name: "Run AI review" }));
     await waitFor(() => {
-      expect(createReviewJob).toHaveBeenCalledWith(8, "openrouter/free", false);
+      expect(createReviewJob).toHaveBeenCalledWith(
+        8,
+        "nvidia/nemotron-3.5-super-vl:free",
+        true,
+      );
       expect(invalidate).toHaveBeenCalledWith({
         queryKey: ["pull-requests", 8, "review-jobs"],
       });

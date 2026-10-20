@@ -182,6 +182,8 @@ export async function listReviewJobs(pullRequestId: number): Promise<ReviewJob[]
 export type ReviewModelList = {
     models: string[];
     default_model: string;
+    agent_models?: string[];
+    agent_default_model?: string;
 };
 
 
