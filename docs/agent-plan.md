@@ -4,7 +4,7 @@
 
 把现有的一次性 review 变成：模型自己决定还缺什么信息，调用 CodeGuard 已有的读函数，再写出与现在相同的 findings。
 
-状态：Day 1–6 的实验已经跑通。产品 review 仍是下面这条没有 tools 的 pack 路径。Day 7 不实现。下一步是把 Day 6 同一轮里的读文件和专家调用改成并行，然后进入 Day 8。
+状态：Day 1–6 的实验已经跑通，同一轮读取和专家调用的并行、以及 plan 接受后的预读也已经写进 Day 6。产品 review 仍是下面这条没有 tools 的 pack 路径。Day 7 的 handoff 不实现。下一步是 Day 8。
 
 ## 现在的 review 在做什么
 
@@ -188,7 +188,7 @@ Day 1 的 mock 可以暂时用 `repo` + `pr_number`。这个参数形状只存�
 
 成功标准：认证或外部输入至少叫到安全专家；查询循环或热路径至少叫到性能专家。trace 里能看到编排者的分发、每一家专家的单独回复、以及汇总后的一份 findings。专家没被分到的文件不出现在它的输入里。
 
-状态：实验已跑通。PR #31 上叫到安全、正确性、性能、可靠性；契约和变更风险未叫。汇总出 14 条 findings。正确性与可靠性对 Day 1 过窄 `except` 的两条相近 finding 没有合成。同一轮里的读文件和专家调用已改为并行；模型若仍每轮只发一个调用，等待时间不会下降。产品路径未改。
+状态：实验已跑通。后来一次 PR #31 上，`agent_day2/tools.py` 为 inspect_carefully，README 与文档为 ignore；叫到安全、正确性、性能、可靠性和变更风险，汇总出 14 条 findings。契约专家未叫。同一轮里的读文件和专家调用会并行。plan 接受后会并行预读所有 inspect 和 inspect_carefully 文件，正文留在这一次运行的 `read_files`。同一次审核的缓存机制不改。产品路径未改。
 
 ## Day 7：换一种协作（handoff）
 
@@ -233,7 +233,7 @@ POST /pull-requests/{id}/review-jobs
 
 成功标准：flag 打开后，手动「Run AI review」能跑完一个 job，现有 PR 页能看到 findings。Webhook 仍走旧的 pack 路径，直到这条手动路径稳定。
 
-状态：未开始
+状态：未开始。Day 6 已收束，这是下一步。
 
 ## Day 9：评估、观测和上下文
 
