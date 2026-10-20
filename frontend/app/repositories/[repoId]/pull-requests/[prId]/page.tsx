@@ -83,8 +83,8 @@ export default function PullRequestReviewPage() {
   const historicalPin = isHistoricalJobPin(jobIdParam);
   const requestedTab = parsePrTab(searchParams.get("tab"));
   const [lastOpenedJobId, setLastOpenedJobId] = useState<number | undefined>();
-  const [modelName, setModelName] = useState("openrouter/free");
-  const [useAgent, setUseAgent] = useState(false);
+  const [modelName, setModelName] = useState("nvidia/nemotron-3.5-super-vl:free");
+  const [useAgent, setUseAgent] = useState(true);
 
   const meQuery = useQuery(authMeQueryOptions);
   const { repository } = useRepository(repositoryId);
@@ -93,10 +93,21 @@ export default function PullRequestReviewPage() {
     queryFn: listReviewModels,
     enabled: meQuery.isSuccess,
   });
-  const modelOptions = modelsQuery.data?.models ?? ["openrouter/free"];
-  const defaultModel = modelsQuery.data?.default_model ?? modelOptions[0];
+  const workflowModels = modelsQuery.data?.models ?? [
+    "openrouter/free",
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+  ];
+  const agentDefaultModel =
+    modelsQuery.data?.agent_default_model ?? "nvidia/nemotron-3.5-super-vl:free";
+  const agentModels = modelsQuery.data?.agent_models ?? [agentDefaultModel];
+  const modelOptions = useAgent ? agentModels : workflowModels;
+  const defaultModel = modelsQuery.data?.default_model ?? workflowModels[0];
   // CHANGED: pick a valid option while rendering. Do not setState inside an effect.
-  const selectedModel = modelOptions.includes(modelName) ? modelName : defaultModel;
+  const selectedModel = modelOptions.includes(modelName)
+    ? modelName
+    : useAgent
+      ? agentDefaultModel
+      : defaultModel;
 
   const prQuery = useQuery({
     queryKey: ["pull-requests", pullRequestId],
@@ -219,7 +230,11 @@ export default function PullRequestReviewPage() {
             <span className="sr-only">Review method</span>
             <select
               value={useAgent ? "agent" : "workflow"}
-              onChange={(event) => setUseAgent(event.target.value === "agent")}
+              onChange={(event) => {
+                const nextAgent = event.target.value === "agent";
+                setUseAgent(nextAgent);
+                setModelName(nextAgent ? agentDefaultModel : "openrouter/free");
+              }}
               disabled={runDisabled}
               aria-label="Review method"
               className="h-9 rounded-md border border-[#3f3f46] bg-[#18181b] px-2 text-sm text-[#fafafa] outline-none focus-visible:ring-2 focus-visible:ring-[#22d3ee]/70 disabled:cursor-not-allowed disabled:opacity-40"

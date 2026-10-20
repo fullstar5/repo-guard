@@ -172,6 +172,9 @@ describe("job status, models, and time", () => {
     expect(reviewModelLabel("nvidia/nemotron-3-ultra-550b-a55b:free")).toBe(
       "Nemotron 3 Ultra",
     );
+    expect(reviewModelLabel("nvidia/nemotron-3.5-super-vl:free")).toBe(
+      "Nemotron 3.5 Super",
+    );
     expect(reviewModelLabel("custom/model")).toBe("custom/model");
   });
 

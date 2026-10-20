@@ -399,7 +399,11 @@ describe("pull request review pin", () => {
     expect(await screen.findAllByText("pinned finding")).not.toHaveLength(0);
     fireEvent.click(screen.getByRole("button", { name: "Run AI review" }));
     await waitFor(() => {
-      expect(createReviewJob).toHaveBeenCalledWith(8, "openrouter/free", false);
+      expect(createReviewJob).toHaveBeenCalledWith(
+        8,
+        "nvidia/nemotron-3.5-super-vl:free",
+        true,
+      );
       expect(invalidate).toHaveBeenCalledWith({
         queryKey: ["pull-requests", 8, "review-jobs"],
       });
