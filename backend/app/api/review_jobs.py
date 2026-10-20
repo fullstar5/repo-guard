@@ -1,9 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status  # pyright: ignore[reportMissingImports]
-from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
-
 from app.api.deps import get_current_user, get_db
 from app.api.rate_limit_deps import limit_review_creation
-from app.core.config import REVIEW_MODEL_ALLOWLIST, get_settings
+from app.core.config import AGENT_REVIEW_MODELS, REVIEW_MODEL_ALLOWLIST, get_settings
 from app.models.review_job import ReviewJobStatus
 from app.models.user import User
 from app.schemas.review_job import (
@@ -19,6 +16,8 @@ from app.services.review_jobs import (
     list_review_jobs_for_pull_request_for_user,
 )
 from app.tasks.review_jobs import execute_review_job_task
+from fastapi import APIRouter, Depends, HTTPException, status  # pyright: ignore[reportMissingImports]
+from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 
 router = APIRouter(tags=["review-jobs"])
 settings = get_settings()
@@ -42,6 +41,8 @@ async def list_review_models(
     return ReviewModelListResponse(
         models=list(REVIEW_MODEL_ALLOWLIST),
         default_model=default_model,
+        agent_models=list(AGENT_REVIEW_MODELS),
+        agent_default_model=AGENT_REVIEW_MODELS[0],
     )
 
 
@@ -92,6 +93,7 @@ async def create_pull_request_review_job(
         pull_request=pull_request,
         provider=payload.provider,
         model_name=payload.model_name,
+        use_agent=payload.use_agent,
     )
 
     if created:

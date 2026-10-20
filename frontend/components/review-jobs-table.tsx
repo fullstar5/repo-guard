@@ -77,7 +77,7 @@ export function ReviewJobsTable({
                 </LeanTableCell>
                 <LeanTableCell className="max-w-[10rem] text-[#a1a1aa]">
                   <span className="block truncate" title={job.model_name}>
-                    {reviewModelLabel(job.model_name)}
+                    {job.use_agent ? "Agent" : "Workflow"} · {reviewModelLabel(job.model_name)}
                   </span>
                 </LeanTableCell>
                 <LeanTableCell className="tabular-nums text-[#a1a1aa]">

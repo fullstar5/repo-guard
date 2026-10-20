@@ -140,7 +140,7 @@ describe("Review jobs table", () => {
       "?tab=review&jobId=1",
     );
     expect(screen.getByText("Queued")).toBeInTheDocument();
-    expect(screen.getAllByText("Free router").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Workflow · Free router").length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: "Retry job 1" })).not.toBeInTheDocument();
     expect(screen.getByText("1:05")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Retry job 2" }));

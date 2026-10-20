@@ -389,6 +389,7 @@ async def _call_llm_once(
     messages: list[dict[str, object]],
     tools: list[dict[str, object]] | None,
     enable_tools: bool = True,
+    model_name: str | None = None,
 ) -> dict[str, object]:
     """Send one Chat Completions request and parse the assistant message.
 
@@ -412,7 +413,7 @@ async def _call_llm_once(
         httpx.HTTPError: The connection failed before a body arrived.
     """
     payload: dict[str, object] = {
-        "model": TEST_MODEL_NAME,
+        "model": model_name,
         "temperature": 0,
         "stream": True,
         "messages": messages,
@@ -456,6 +457,7 @@ async def _call_llm(
     messages: list[dict[str, object]],
     tools: list[dict[str, object]] | None = None,
     enable_tools: bool = True,
+    model_name: str | None = None,
 ) -> dict[str, object]:
     """Send one Chat Completions request that includes tools.
 
@@ -477,7 +479,9 @@ async def _call_llm(
     last_reason = "no attempt"
     for attempt in range(1, 4):
         try:
-            return await _call_llm_once(client, messages, tools, enable_tools)
+            return await _call_llm_once(
+                client, messages, tools, enable_tools, model_name
+            )
         except _RetryableOpenRouterError as exc:
             last_reason = str(exc)
             print(f"OpenRouter attempt {attempt} did not return a completion: {exc}")

@@ -83,4 +83,5 @@ def test_missing_active_job_uses_existing_create_function():
         pull_request=pull_request,
         provider="openrouter",
         model_name="openrouter/free",
+        use_agent=False,
     )

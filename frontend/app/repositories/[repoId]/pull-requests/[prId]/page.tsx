@@ -84,6 +84,7 @@ export default function PullRequestReviewPage() {
   const requestedTab = parsePrTab(searchParams.get("tab"));
   const [lastOpenedJobId, setLastOpenedJobId] = useState<number | undefined>();
   const [modelName, setModelName] = useState("openrouter/free");
+  const [useAgent, setUseAgent] = useState(false);
 
   const meQuery = useQuery(authMeQueryOptions);
   const { repository } = useRepository(repositoryId);
@@ -131,7 +132,7 @@ export default function PullRequestReviewPage() {
   });
 
   const createJobMutation = useMutation({
-    mutationFn: () => createReviewJob(pullRequestId, selectedModel),
+    mutationFn: () => createReviewJob(pullRequestId, selectedModel, useAgent),
     onSuccess: () => {
       void queryClient.invalidateQueries({
         queryKey: ["pull-requests", pullRequestId, "review-jobs"],
@@ -214,6 +215,19 @@ export default function PullRequestReviewPage() {
           ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-2 text-sm text-[#a1a1aa]">
+            <span className="sr-only">Review method</span>
+            <select
+              value={useAgent ? "agent" : "workflow"}
+              onChange={(event) => setUseAgent(event.target.value === "agent")}
+              disabled={runDisabled}
+              aria-label="Review method"
+              className="h-9 rounded-md border border-[#3f3f46] bg-[#18181b] px-2 text-sm text-[#fafafa] outline-none focus-visible:ring-2 focus-visible:ring-[#22d3ee]/70 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <option value="workflow">Workflow</option>
+              <option value="agent">Agent</option>
+            </select>
+          </label>
           <label className="flex items-center gap-2 text-sm text-[#a1a1aa]">
             <span className="sr-only">Review model</span>
             <select

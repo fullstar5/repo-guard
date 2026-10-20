@@ -3,6 +3,7 @@ from enum import Enum as PyEnum
 
 from app.models.base import Base
 from sqlalchemy import (  # pyright: ignore[reportMissingImports]
+    Boolean,
     DateTime,
     Enum,
     ForeignKey,
@@ -56,6 +57,12 @@ class ReviewJob(Base):
 
     provider: Mapped[str] = mapped_column(String(100), nullable=False)
     model_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    use_agent: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
 
     total_files: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_chunks: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

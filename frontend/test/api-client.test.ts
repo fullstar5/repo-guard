@@ -110,6 +110,7 @@ describe("API client", () => {
     expect(http.post).toHaveBeenCalledWith("/pull-requests/8/review-jobs", {
       provider: "openrouter",
       model_name: "nvidia/nemotron-3-ultra-550b-a55b:free",
+      use_agent: false,
     });
   });
 });

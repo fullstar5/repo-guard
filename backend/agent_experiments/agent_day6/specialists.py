@@ -234,8 +234,8 @@ def slice_read_files(
 ) -> dict[str, object]:
     """Select only the requested files that this review has already read.
 
-    The patch and source text are the copies already stored by get_file_content.
-    That read already limits each field to 8000 characters.
+    A production record sends its review windows. An experiment record sends
+    the patch and source already stored by get_file_content.
 
     Args:
         read_files: Bodies saved after successful reads.
@@ -259,6 +259,16 @@ def slice_read_files(
         saved = read_files.get(path)
         if not isinstance(saved, dict) or "error" in saved:
             return {"error": f"Read {path} with get_file_content before assigning it."}
+        windows = saved.get("windows")
+        if isinstance(windows, list) and windows:
+            files.append(
+                {
+                    "path": path,
+                    "status": saved.get("status"),
+                    "windows": windows,
+                }
+            )
+            continue
         files.append(
             {
                 "path": path,

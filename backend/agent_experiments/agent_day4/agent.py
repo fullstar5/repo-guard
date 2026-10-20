@@ -29,8 +29,7 @@ from app.services.github_pr_files import (
 )
 from app.services.github_tokens import GitHubTokenUnavailable
 from app.services.openrouter_provider import OpenRouterReviewProvider
-
-TOOL_TEXT_LIMIT = min(get_settings().review_pack_max_chars, 8000)
+from app.services.review_file_cache import ReviewFileCache, review_file_record
 
 SYSTEM_PROMPT = (
     "You are a CodeGuard review assistant. "
@@ -95,23 +94,18 @@ SEARCH_CODE: dict[str, object] = {
 }
 
 
+_FILE_CONTENT_DESCRIPTION = (
+    "Read one repository file needed to review the selected pull request. "
+    "Changed files include their patch. A file that was not changed is loaded "
+    "from the pull request head as context. "
+    "If this review already read the path, the saved body is returned."
+)
 DAY4_TOOLS: list[dict[str, object]] = []
 for tool in DAY2_TOOLS:
     function = tool.get("function")
     if isinstance(function, dict) and function.get("name") == "get_file_content":
         DAY4_TOOLS.append(
-            {
-                **tool,
-                "function": {
-                    **function,
-                    "description": (
-                        "Read one repository file needed to review the selected pull request. "
-                        "Changed files include their patch. A file that was not changed is loaded "
-                        "from the pull request head as context. "
-                        "If this review already read the path, the saved body is returned."
-                    ),
-                },
-            }
+            {**tool, "function": {**function, "description": _FILE_CONTENT_DESCRIPTION}}
         )
     else:
         DAY4_TOOLS.append(tool)
@@ -121,32 +115,66 @@ DAY4_TOOLS.extend([REFRESH_FILE_CONTENT, GET_RELATED_FILES, SEARCH_CODE])
 class Day4Tools:
     """Day 2 tools plus one-hop imports and patch search."""
 
-    def __init__(self, base: BoundReviewTools) -> None:
+    def __init__(
+        self,
+        base: BoundReviewTools,
+        file_cache: ReviewFileCache | None = None,
+    ) -> None:
         """Store the bound Day 2 tools.
 
         Args:
             base: Tools already limited to one user and one pull request.
+            file_cache: Redis bodies for a production review job.
+                Experiment runs leave this unset.
 
         Returns:
             None.
         """
         self.base = base
+        self.file_cache = file_cache
 
-    async def read_path(self, path: str) -> dict[str, object]:
+    async def read_path(self, path: str, *, refresh: bool = False) -> dict[str, object]:
         """Read a changed file, or a same-repository file from the pull request head.
 
         Args:
             path: Repository path.
+            refresh: True to ignore the job cache and fetch again.
 
         Returns:
             Patch and source for a changed file. Unchanged files have status
             ``context`` and no patch. Ignored paths return an error.
+            A production job returns the Redis body when it is already stored.
         """
         if is_ignored_path(path):
             return {"error": f"{path} is ignored for review."}
+        if self.file_cache is not None and not refresh:
+            cached = await self.file_cache.get(path)
+            cached_windows = cached.get("windows") if isinstance(cached, dict) else None
+            if isinstance(cached, dict) and isinstance(cached_windows, list) and cached_windows:
+                loaded = dict(cached)
+                loaded["cached"] = True
+                if not loaded.get("note"):
+                    loaded["note"] = "Loaded from the review job cache."
+                return loaded
         changed = await self.base.get_file_content({"path": path})
         if "error" not in changed:
-            return changed
+            source = changed.get("source_text")
+            patch = changed.get("patch")
+            source_text = source.get("text") if isinstance(source, dict) else None
+            patch_text = patch.get("text") if isinstance(patch, dict) else None
+            note = changed.get("note") if isinstance(changed.get("note"), str) else None
+            record = review_file_record(
+                filename=path,
+                status=str(changed.get("status") or "modified"),
+                patch=patch_text if isinstance(patch_text, str) else None,
+                source_text=source_text if isinstance(source_text, str) else None,
+                context_lines=get_settings().review_context_lines,
+                max_chars=get_settings().review_pack_max_chars,
+                note=note,
+            )
+            if self.file_cache is not None:
+                await self.file_cache.put(path, record)
+            return record
         if not str(changed.get("error", "")).startswith("No changed file"):
             return changed
 
@@ -182,21 +210,19 @@ class Day4Tools:
             return {"error": str(exc)}
         if not text:
             return {"error": f"Could not read {path} from the pull request head."}
-        if len(text) <= TOOL_TEXT_LIMIT:
-            source_text: dict[str, object] = {"text": text, "truncated": False}
-        else:
-            source_text = {
-                "text": text[:TOOL_TEXT_LIMIT],
-                "truncated": True,
-                "original_chars": len(text),
-            }
-        return {
-            "path": path,
-            "status": "context",
-            "patch": None,
-            "source_text": source_text,
-            "note": "Not part of the diff. Loaded from the pull request head as context.",
-        }
+        note = "Not part of the diff. Loaded from the pull request head as context."
+        record = review_file_record(
+            filename=path,
+            status="context",
+            patch=None,
+            source_text=text,
+            context_lines=get_settings().review_context_lines,
+            max_chars=get_settings().review_pack_max_chars,
+            note=note,
+        )
+        if self.file_cache is not None:
+            await self.file_cache.put(path, record)
+        return record
 
     async def get_related_files(self, state: AgentState, path: str) -> dict[str, object]:
         """List one hop of imports for a file this review already read.
@@ -273,11 +299,19 @@ async def _execute(
             cached = dict(state.read_files[path])
             cached["cached"] = True
             cached["note"] = "Already read in this review. Full text was not fetched again."
+            if isinstance(cached.get("windows"), list) and cached["windows"]:
+                cached.pop("source_text", None)
             return cached, True
-        result = await tools.read_path(path)
+        result = await tools.read_path(path, refresh=name == "refresh_file_content")
+        from_cache = result.get("cached") is True
         if "error" not in result:
             state.read_files[path] = result
-        return result, False
+        shown = result
+        if isinstance(result.get("windows"), list) and result["windows"]:
+            shown = {
+                key: value for key, value in result.items() if key != "source_text"
+            }
+        return shown, from_cache
 
     result = await tools.base.execute(name, arguments)
     return result, False

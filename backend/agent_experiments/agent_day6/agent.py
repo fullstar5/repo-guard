@@ -25,8 +25,10 @@ from agent_experiments.agent_day6.specialists import (
     specialist_tools,
 )
 from app.services.openrouter_provider import OpenRouterReviewProvider
+from app.services.review_file_cache import ReviewFileCache
 
 MAX_ROUNDS = 12
+_PREFETCH_CONCURRENCY = 4
 _READ_TOOLS = {"get_file_content", "refresh_file_content", "get_related_files", "search_code"}
 
 SYSTEM_PROMPT = (
@@ -77,6 +79,7 @@ async def _ask_specialist(
     specialty: str,
     arguments: dict[str, object],
     reports: list[dict[str, object]],
+    model_name: str | None = None,
 ) -> dict[str, object]:
     """Open one specialist conversation on a slice of files already read.
 
@@ -115,6 +118,7 @@ async def _ask_specialist(
             },
         ],
         enable_tools=False,
+        model_name=model_name,
     )
     content = message.get("content")
     text = content.strip() if isinstance(content, str) else ""
@@ -168,9 +172,11 @@ async def _prefetch_planned_files(
         for path, disposition in plan.items()
         if disposition in {"inspect", "inspect_carefully"} and path not in state.read_files
     ]
+    semaphore = asyncio.Semaphore(_PREFETCH_CONCURRENCY)
 
     async def load(path: str) -> tuple[str, dict[str, object]]:
-        return path, await tools.read_path(path)
+        async with semaphore:
+            return path, await tools.read_path(path)
 
     loaded: list[str] = []
     failed: list[dict[str, object]] = []
@@ -193,6 +199,8 @@ async def _execute(
     related_ok: set[str],
     name: str,
     arguments: dict[str, object],
+    model_name: str | None = None,
+    fetch_notes: list[str] | None = None,
 ) -> tuple[dict[str, object], bool]:
     """Run an orchestrator tool.
 
@@ -215,7 +223,9 @@ async def _execute(
     """
     specialty = SPECIALIST_TOOL_NAMES.get(name)
     if specialty is not None:
-        result = await _ask_specialist(client, provider, state, specialty, arguments, reports)
+        result = await _ask_specialist(
+            client, provider, state, specialty, arguments, reports, model_name
+        )
         return result, False
     if name == "finish_review":
         return aggregate_findings(reports), False
@@ -223,6 +233,11 @@ async def _execute(
         result, cached = await day5_execute(tools, state, plan, name, arguments)
         if isinstance(result, dict) and result.get("accepted") is True:
             prefetched = await _prefetch_planned_files(tools, state, plan)
+            failed = prefetched.get("prefetch_failed")
+            if isinstance(failed, list) and fetch_notes is not None:
+                for item in failed:
+                    if isinstance(item, dict):
+                        fetch_notes.append(f"{item.get('path')}: {item.get('error')}")
             result = {
                 **result,
                 **prefetched,
@@ -253,18 +268,35 @@ async def _execute(
     return await day5_execute(tools, state, plan, name, arguments)
 
 
-async def run_agent(user_text: str) -> str:
+async def run_agent(
+    user_text: str,
+    *,
+    user_id: int,
+    pull_request_id: int,
+    model_name: str | None = None,
+    save_checkpoint: bool = True,
+    file_cache: ReviewFileCache | None = None,
+) -> dict[str, object]:
     """Plan the review, assign specialists, and merge their findings.
 
     Args:
         user_text: The review request.
+        user_id: Local user id. Production passes the repository owner.
+            This function does not substitute a test user.
+        pull_request_id: Local pull request id. Production passes the job's pull request.
+            This function does not substitute a test pull request.
+        model_name: OpenRouter model id. The experiment default is used when omitted.
+        save_checkpoint: Write ``agent_day3/checkpoint.json`` after tool rounds.
+            Production jobs leave this false.
+        file_cache: Redis file cache for a production review job.
+            Experiment runs leave this unset.
 
     Returns:
-        The aggregated findings JSON, or an empty string when no specialist ran.
+        The aggregated summary and findings. Findings are empty when no specialist ran.
     """
     state = AgentState(
-        user_id=TEST_USER_ID,
-        pull_request_id=TEST_PR_ID,
+        user_id=user_id,
+        pull_request_id=pull_request_id,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_text},
@@ -273,18 +305,24 @@ async def run_agent(user_text: str) -> str:
     plan: dict[str, str] = {}
     reports: list[dict[str, object]] = []
     related_ok: set[str] = set()
+    fetch_notes: list[str] = []
     print("========== AGENT RUN ==========")
     print()
     _print_block("USER", user_text)
 
     timeout = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=30.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
-        tools = Day4Tools(BoundReviewTools(state.user_id, state.pull_request_id, client))
-        provider = OpenRouterReviewProvider(client, TEST_MODEL_NAME)
+        tools = Day4Tools(
+            BoundReviewTools(state.user_id, state.pull_request_id, client),
+            file_cache=file_cache,
+        )
+        provider = OpenRouterReviewProvider(client, model_name or TEST_MODEL_NAME)
         finished = False
         for _ in range(MAX_ROUNDS):
             state.round_index += 1
-            message = await _call_llm(client, state.messages, DAY6_TOOLS)
+            message = await _call_llm(
+                client, state.messages, DAY6_TOOLS, model_name=model_name
+            )
             tool_calls = message.get("tool_calls") or []
             if not isinstance(tool_calls, list) or not tool_calls:
                 break
@@ -303,7 +341,17 @@ async def run_agent(user_text: str) -> str:
                 try:
                     arguments = parse_tool_arguments(raw_arguments)
                     result, cached = await _execute(
-                        client, provider, tools, state, plan, reports, related_ok, name, arguments
+                        client,
+                        provider,
+                        tools,
+                        state,
+                        plan,
+                        reports,
+                        related_ok,
+                        name,
+                        arguments,
+                        model_name,
+                        fetch_notes,
                     )
                 except Exception as exc:
                     arguments = {"raw": raw_arguments}
@@ -362,15 +410,28 @@ async def run_agent(user_text: str) -> str:
                 )
                 if name == "finish_review":
                     finished = True
-            state.save()
+            if save_checkpoint:
+                state.save()
             if finished:
                 break
         merged = aggregate_findings(reports)
-        state.save()
+        read_windows: list[list[str]] = []
+        for path, record in state.read_files.items():
+            file_windows = record.get("windows") if isinstance(record, dict) else None
+            if not isinstance(file_windows, list):
+                continue
+            for window in file_windows:
+                if isinstance(window, str):
+                    read_windows.append([path, window])
+        merged["finished"] = finished
+        merged["windows"] = read_windows
+        merged["fetch_notes"] = fetch_notes
+        if save_checkpoint:
+            state.save()
         _print_block("PLAN", plan)
         _print_block("SPECIALISTS", [report.get("specialist") for report in reports])
         _print_block("AGGREGATED", merged)
-        return json.dumps(merged, ensure_ascii=False)
+        return merged
 
 
 async def _main() -> None:
@@ -385,7 +446,11 @@ async def _main() -> None:
         "Review this pull request. Plan the files, assign specialists, "
         "and finish with their merged findings."
     )
-    await run_agent(question)
+    await run_agent(
+        question,
+        user_id=TEST_USER_ID,
+        pull_request_id=TEST_PR_ID,
+    )
 
 
 if __name__ == "__main__":

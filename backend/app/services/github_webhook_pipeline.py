@@ -4,7 +4,7 @@
 import logging
 
 import httpx  # pyright: ignore[reportMissingImports]
-from app.core.config import get_settings
+from app.core.config import AGENT_REVIEW_MODELS, get_settings
 from app.core.database import AsyncSessionLocal
 from app.models.repository import Repository
 from app.models.review_job import ReviewJobStatus
@@ -101,8 +101,8 @@ async def _sync_and_review_for_repo(
         db=db,
         pull_request=pull_request,
         provider="openrouter",
-        # Webhook stays on the server default. The browser allowlist does not apply here.
-        model_name=settings.open_router_default_model,
+        model_name=AGENT_REVIEW_MODELS[0],
+        use_agent=True,
     )
     if not created:
         logger.info(

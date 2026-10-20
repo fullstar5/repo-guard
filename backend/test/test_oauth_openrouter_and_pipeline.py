@@ -412,7 +412,8 @@ def test_pipeline_skips_unknown_repo_missing_token_and_reuses_active_job():
         ):
             await process_github_pull_request_event(payload)
         assert sync.await_args.kwargs.get("replace_missing", False) is False
-        assert create_job.await_args.kwargs["model_name"]
+        assert create_job.await_args.kwargs["model_name"] == "nvidia/nemotron-3.5-super-vl:free"
+        assert create_job.await_args.kwargs["use_agent"] is True
         delay.assert_not_called()
 
     asyncio.run(_reuse())

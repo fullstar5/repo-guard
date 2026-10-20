@@ -2,7 +2,7 @@ import json
 
 import httpx  # pyright: ignore[reportMissingImports]
 from app.core.config import get_settings
-from agent_experiments.agent_day1.tools import TOOLS, execute_tool
+from agent_experiments.agent_day1.tools import TOOLS, execute_tool, parse_tool_arguments
 
 settings = get_settings()
 
@@ -131,10 +131,7 @@ async def run_agent(user_text: str) -> str:
                 name = str(function.get("name") or "")
                 raw_arguments = function.get("arguments")
                 try:
-                    parsed = json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
-                    if not isinstance(parsed, dict):
-                        raise TypeError("Tool arguments must be a JSON object.")
-                    arguments = parsed
+                    arguments = parse_tool_arguments(raw_arguments)
                     result: dict[str, object] = execute_tool(name, arguments)
                 except (json.JSONDecodeError, TypeError) as exc:
                     arguments = {"raw": raw_arguments}

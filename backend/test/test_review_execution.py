@@ -533,6 +533,236 @@ def test_replace_review_findings_dedups_before_insert():
     db.flush.assert_awaited()
 
 
+def test_agent_review_stores_pack_count_and_file_cache():
+    review_job = _job(use_agent=True)
+    saved = _job(status=ReviewJobStatus.processing, use_agent=True)
+    read_db = AsyncMock()
+    read_db.get = AsyncMock(return_value=SimpleNamespace(id=10, repository_id=3))
+    repo_result = MagicMock()
+    repo_result.scalar_one.return_value = SimpleNamespace(
+        user=SimpleNamespace(id=7, github_access_token="token"),
+        owner_login="octo",
+        name="demo",
+    )
+    read_db.execute = AsyncMock(return_value=repo_result)
+    write_db = AsyncMock()
+    write_db.get = AsyncMock(return_value=saved)
+    files = [_file(5, "a.py", body="alpha\n"), _file(6, "b.py", body="beta\n")]
+    cached: dict[str, dict] = {}
+
+    async def _cache_get(_self, path):
+        return cached.get(path)
+
+    async def _cache_put(_self, path, body):
+        cached[path] = body
+
+    agent = AsyncMock(
+        return_value={
+            "finished": True,
+            "summary": "agent summary",
+            "findings": [
+                {
+                    "severity": "high",
+                    "summary": "token is logged",
+                    "file_path": "a.py",
+                    "start_line": 4,
+                    "end_line": 6,
+                    "suggestion": "remove the log",
+                }
+            ],
+            "windows": [["a.py", "A" * 200], ["b.py", "B" * 200]],
+            "fetch_notes": [],
+        }
+    )
+
+    async def _fetch(_client, _token, contents_url, **_kwargs):
+        for item in files:
+            if item.filename in (contents_url or ""):
+                return item.body
+        return None
+
+    async def _inner():
+        with (
+            patch(
+                "app.services.review_jobs.get_pull_request_files",
+                new=AsyncMock(return_value=files),
+            ),
+            patch(
+                "app.services.review_jobs.fetch_github_file_text",
+                new=AsyncMock(side_effect=_fetch),
+            ),
+            patch(
+                "app.services.github_tokens.get_valid_github_access_token",
+                new=AsyncMock(return_value="token"),
+            ),
+            patch(
+                "app.services.review_jobs.OpenRouterReviewProvider",
+            ) as provider_cls,
+            patch(
+                "app.services.review_jobs.AsyncSessionLocal",
+                return_value=async_cm(write_db),
+            ),
+            patch("app.services.review_jobs.settings.review_pack_max_chars", 80),
+            patch("app.services.review_jobs.settings.review_context_lines", 0),
+            patch("app.services.review_jobs.ReviewFileCache.get", new=_cache_get),
+            patch("app.services.review_jobs.ReviewFileCache.put", new=_cache_put),
+            patch(
+                "agent_experiments.agent_day6.agent.run_agent",
+                new=agent,
+            ),
+        ):
+            result = await execute_review_job(
+                db=read_db,
+                review_job=review_job,
+                http_client=AsyncMock(),
+            )
+            provider_cls.assert_not_called()
+        return result
+
+    result = asyncio.run(_inner())
+    agent.assert_awaited()
+    assert agent.await_args.kwargs["user_id"] == 7
+    assert agent.await_args.kwargs["pull_request_id"] == 10
+    assert agent.await_args.kwargs["model_name"] == "openrouter/free"
+    assert agent.await_args.kwargs["save_checkpoint"] is False
+    assert agent.await_args.kwargs["file_cache"].job_id == 42
+    assert result.status == ReviewJobStatus.completed
+    assert saved.result_summary == "agent summary"
+    assert saved.total_chunks == 2
+    assert saved.error_message is None
+    assert cached == {}
+    stored = [call.args[0] for call in write_db.add.call_args_list]
+    assert stored[0].summary == "token is logged"
+    assert stored[0].file_path == "a.py"
+
+
+def test_agent_review_reuses_cached_windows_without_github():
+    review_job = _job(use_agent=True)
+    saved = _job(status=ReviewJobStatus.processing, use_agent=True)
+    read_db = AsyncMock()
+    read_db.get = AsyncMock(return_value=SimpleNamespace(id=10, repository_id=3))
+    repo_result = MagicMock()
+    repo_result.scalar_one.return_value = SimpleNamespace(
+        user=SimpleNamespace(id=7, github_access_token="token"),
+        owner_login="octo",
+        name="demo",
+    )
+    read_db.execute = AsyncMock(return_value=repo_result)
+    write_db = AsyncMock()
+    write_db.get = AsyncMock(return_value=saved)
+    cached = {
+        "a.py": {
+            "path": "a.py",
+            "status": "modified",
+            "windows": ["File: a.py\n" + ("x" * 200)],
+            "source_text": {"text": "cached-source\n", "truncated": False},
+        }
+    }
+    fetch = AsyncMock(return_value="fresh\n")
+
+    async def _cache_get(_self, path):
+        return cached.get(path)
+
+    async def _inner():
+        with (
+            patch(
+                "app.services.review_jobs.get_pull_request_files",
+                new=AsyncMock(return_value=[_file(5, "a.py")]),
+            ),
+            patch("app.services.review_jobs.fetch_github_file_text", new=fetch),
+            patch(
+                "app.services.review_jobs.OpenRouterReviewProvider",
+            ),
+            patch(
+                "app.services.review_jobs.AsyncSessionLocal",
+                return_value=async_cm(write_db),
+            ),
+            patch("app.services.review_jobs.settings.review_pack_max_chars", 80),
+            patch("app.services.review_jobs.ReviewFileCache.get", new=_cache_get),
+            patch(
+                "app.services.review_jobs.ReviewFileCache.put",
+                new=AsyncMock(),
+            ),
+            patch(
+                "agent_experiments.agent_day6.agent.run_agent",
+                new=AsyncMock(
+                    return_value={
+                        "finished": True,
+                        "summary": "cached",
+                        "findings": [],
+                        "windows": [["a.py", "File: a.py\n" + ("x" * 200)]],
+                    }
+                ),
+            ),
+        ):
+            await execute_review_job(
+                db=read_db,
+                review_job=review_job,
+                http_client=AsyncMock(),
+            )
+
+    asyncio.run(_inner())
+    fetch.assert_not_called()
+    assert saved.total_chunks == 1
+    assert saved.result_summary == "cached"
+
+
+def test_unfinished_agent_review_is_marked_failed():
+    review_job = _job(use_agent=True)
+    failed = _job(status=ReviewJobStatus.failed, use_agent=True)
+    read_db = AsyncMock()
+    read_db.get = AsyncMock(return_value=SimpleNamespace(id=10, repository_id=3))
+    repo_result = MagicMock()
+    repo_result.scalar_one.return_value = SimpleNamespace(
+        user=SimpleNamespace(id=7, github_access_token="token"),
+        owner_login="octo",
+        name="demo",
+    )
+    read_db.execute = AsyncMock(return_value=repo_result)
+
+    async def _cache_get(_self, path):
+        if path != "a.py":
+            return None
+        return {
+            "path": "a.py",
+            "windows": ["File: a.py\nprint(1)\n"],
+        }
+
+    async def _inner():
+        with (
+            patch(
+                "app.services.review_jobs.get_pull_request_files",
+                new=AsyncMock(return_value=[_file(5, "a.py")]),
+            ),
+            patch("app.services.review_jobs.ReviewFileCache.get", new=_cache_get),
+            patch("app.services.review_jobs.ReviewFileCache.put", new=AsyncMock()),
+            patch(
+                "agent_experiments.agent_day6.agent.run_agent",
+                new=AsyncMock(
+                    return_value={
+                        "finished": False,
+                        "summary": "No specialist reported an issue.",
+                        "findings": [],
+                    }
+                ),
+            ),
+            patch(
+                "app.services.review_jobs.mark_review_job_failed_by_id",
+                new=AsyncMock(return_value=failed),
+            ) as mark_failed,
+        ):
+            result = await execute_review_job(
+                db=read_db,
+                review_job=review_job,
+                http_client=AsyncMock(),
+            )
+        return result, mark_failed
+
+    result, mark_failed = asyncio.run(_inner())
+    assert result is failed
+    assert "finish_review" in mark_failed.await_args.args[1]
+
+
 def _ready_db(*, token: str | None = "token"):
     db = AsyncMock()
     db.get = AsyncMock(return_value=SimpleNamespace(id=10, repository_id=3))

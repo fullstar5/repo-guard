@@ -13,11 +13,6 @@ from app.services.github_pr_files import (
 )
 from app.services.github_tokens import GitHubTokenSession, GitHubTokenUnavailable
 
-# One file body sent back to the model. The review pack budget is much larger;
-# this cap keeps a single tool result from filling the Day 2 transcript.
-TOOL_TEXT_LIMIT = 8000
-
-
 def parse_tool_arguments(raw_arguments: object) -> dict[str, object]:
     """Parse a tool call's arguments field.
 
@@ -38,26 +33,6 @@ def parse_tool_arguments(raw_arguments: object) -> dict[str, object]:
     if not isinstance(parsed, dict):
         raise TypeError("Tool arguments must be a JSON object.")
     return parsed
-
-
-def _clip(text: str | None) -> dict[str, object]:
-    """Shorten one text field before it is sent to the model.
-
-    Args:
-        text: Patch or source text, or None when GitHub has no body.
-
-    Returns:
-        The text, whether it was cut, and the original length when cut.
-    """
-    if text is None:
-        return {"text": None, "truncated": False}
-    if len(text) <= TOOL_TEXT_LIMIT:
-        return {"text": text, "truncated": False}
-    return {
-        "text": text[:TOOL_TEXT_LIMIT],
-        "truncated": True,
-        "original_chars": len(text),
-    }
 
 
 @dataclass(frozen=True)
@@ -341,7 +316,7 @@ class BoundReviewTools:
             arguments: Must include ``path``, a filename from the changed-file list.
 
         Returns:
-            Status, clipped patch, and clipped head text. Removed files do not
+            Status, the full patch, and the full head text. Removed files do not
             fetch head text. An error object when the path is missing or not in this PR.
         """
         path = arguments.get("path")
@@ -373,7 +348,7 @@ class BoundReviewTools:
         payload: dict[str, object] = {
             "path": path,
             "status": status,
-            "patch": _clip(patch),
+            "patch": None if patch is None else {"text": patch, "truncated": False},
         }
         if status == "removed":
             payload["source_text"] = None
@@ -400,5 +375,7 @@ class BoundReviewTools:
             payload["note"] = str(exc)
             return payload
 
-        payload["source_text"] = _clip(source_text)
+        payload["source_text"] = (
+            None if source_text is None else {"text": source_text, "truncated": False}
+        )
         return payload

@@ -83,7 +83,9 @@ DAY3_TOOLS: list[dict[str, object]] = []
 for tool in DAY2_TOOLS:
     function = tool.get("function")
     if isinstance(function, dict) and function.get("name") == "get_file_content":
-        DAY3_TOOLS.append({**tool, "function": {**function, "description": GET_FILE_CONTENT_DESCRIPTION}})
+        DAY3_TOOLS.append(
+            {**tool, "function": {**function, "description": GET_FILE_CONTENT_DESCRIPTION}}
+        )
     else:
         DAY3_TOOLS.append(tool)
 DAY3_TOOLS.append(REFRESH_FILE_CONTENT)
@@ -204,11 +206,12 @@ async def run_agent(
                     result = {"error": f"{type(exc).__name__}: {exc}"}
                     cached = False
 
+                path = arguments.get("path")
                 state.tool_summaries.append(
                     {
                         "round": state.round_index,
                         "name": name,
-                        "path": arguments.get("path") if isinstance(arguments.get("path"), str) else None,
+                        "path": path if isinstance(path, str) else None,
                         "cached": cached,
                         "error": result.get("error"),
                         "note": result.get("note"),

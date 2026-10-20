@@ -453,6 +453,9 @@ def test_review_model_list_uses_the_allowlist():
     body = response.json()
     assert "openrouter/free" in body["models"]
     assert "nvidia/nemotron-3-ultra-550b-a55b:free" in body["models"]
+    assert body["agent_models"] == ["nvidia/nemotron-3.5-super-vl:free"]
+    assert body["agent_default_model"] == "nvidia/nemotron-3.5-super-vl:free"
+    assert body["agent_default_model"] in body["agent_models"]
     assert body["default_model"] in body["models"]
 
 
@@ -530,6 +533,7 @@ def _review_job(job_id: int, status: ReviewJobStatus) -> ReviewJob:
         status=status,
         provider="openrouter",
         model_name="openrouter/free",
+        use_agent=False,
         total_files=1,
         total_chunks=0,
     )
