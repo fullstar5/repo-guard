@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir --requirement requirements.txt
 COPY --chown=app:app alembic ./alembic
 COPY --chown=app:app alembic.ini .
 COPY --chown=app:app app ./app
+COPY --chown=app:app agent_experiments ./agent_experiments
 
 USER app
 
