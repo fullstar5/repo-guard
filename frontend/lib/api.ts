@@ -96,6 +96,7 @@ export type ReviewJob = {
     status: ReviewJobStatus;
     provider: string;
     model_name: string;
+    use_agent?: boolean;
     total_files: number;
     total_chunks: number;
     error_message: string | null;
@@ -193,12 +194,14 @@ export async function listReviewModels(): Promise<ReviewModelList> {
 export async function createReviewJob(
     pullRequestId: number,
     modelName: string,
+    useAgent = false,
 ): Promise<ReviewJob> {
     const response = await api.post<ReviewJob>(
         `/pull-requests/${pullRequestId}/review-jobs`,
         {
             provider: "openrouter",
             model_name: modelName,
+            use_agent: useAgent,
         },
     );
     return response.data;

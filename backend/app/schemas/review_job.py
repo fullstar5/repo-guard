@@ -2,16 +2,15 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator  # pyright: ignore[reportMissingImports]
-
 from app.core.config import REVIEW_MODEL_ALLOWLIST
 from app.schemas.review_finding import ReviewFindingRead
-
+from pydantic import BaseModel, ConfigDict, Field, field_validator  # pyright: ignore[reportMissingImports]
 
 
 class CreateReviewJobRequest(BaseModel):
     provider: str = "openrouter"
     model_name: str = "openrouter/free"
+    use_agent: bool = False
 
     @field_validator("model_name")
     @classmethod
@@ -41,6 +40,7 @@ class ReviewJobRead(BaseModel):
     status: str
     provider: str
     model_name: str
+    use_agent: bool = False
     total_files: int
     total_chunks: int
     error_message: str | None = None

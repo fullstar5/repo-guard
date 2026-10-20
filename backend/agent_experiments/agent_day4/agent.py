@@ -29,8 +29,7 @@ from app.services.github_pr_files import (
 )
 from app.services.github_tokens import GitHubTokenUnavailable
 from app.services.openrouter_provider import OpenRouterReviewProvider
-
-TOOL_TEXT_LIMIT = min(get_settings().review_pack_max_chars, 8000)
+from app.services.review_file_cache import ReviewFileCache, review_file_record
 
 SYSTEM_PROMPT = (
     "You are a CodeGuard review assistant. "
@@ -95,58 +94,111 @@ SEARCH_CODE: dict[str, object] = {
 }
 
 
-DAY4_TOOLS: list[dict[str, object]] = []
-for tool in DAY2_TOOLS:
-    function = tool.get("function")
-    if isinstance(function, dict) and function.get("name") == "get_file_content":
-        DAY4_TOOLS.append(
-            {
-                **tool,
-                "function": {
-                    **function,
-                    "description": (
-                        "Read one repository file needed to review the selected pull request. "
-                        "Changed files include their patch. A file that was not changed is loaded "
-                        "from the pull request head as context. "
-                        "If this review already read the path, the saved body is returned."
-                    ),
-                },
-            }
-        )
-    else:
-        DAY4_TOOLS.append(tool)
-DAY4_TOOLS.extend([REFRESH_FILE_CONTENT, GET_RELATED_FILES, SEARCH_CODE])
+def _day4_tools() -> list[dict[str, object]]:
+    """Add Day 4 tools to the Day 2 schemas.
+
+    Returns:
+        Tool schemas for this experiment.
+    """
+    description = (
+        "Read one repository file needed to review the selected pull request. "
+        "Changed files include their patch. A file that was not changed is loaded "
+        "from the pull request head as context. "
+        "If this review already read the path, the saved body is returned."
+    )
+    tools: list[dict[str, object]] = []
+    for tool in DAY2_TOOLS:
+        function = tool.get("function")
+        if isinstance(function, dict) and function.get("name") == "get_file_content":
+            tools.append({**tool, "function": {**function, "description": description}})
+        else:
+            tools.append(tool)
+    tools.extend([REFRESH_FILE_CONTENT, GET_RELATED_FILES, SEARCH_CODE])
+    return tools
+
+
+DAY4_TOOLS = _day4_tools()
+
+
+def _saved_text(saved: dict[str, object]) -> str:
+    """Read patch or source text out of a stored file result.
+
+    Args:
+        saved: One value from ``read_files``.
+
+    Returns:
+        The best available text, or an empty string.
+    """
+    for key in ("source_text", "patch"):
+        body = saved.get(key)
+        if isinstance(body, dict) and isinstance(body.get("text"), str):
+            return body["text"]
+    return ""
 
 
 class Day4Tools:
     """Day 2 tools plus one-hop imports and patch search."""
 
-    def __init__(self, base: BoundReviewTools) -> None:
+    def __init__(
+        self,
+        base: BoundReviewTools,
+        file_cache: ReviewFileCache | None = None,
+    ) -> None:
         """Store the bound Day 2 tools.
 
         Args:
             base: Tools already limited to one user and one pull request.
+            file_cache: Redis bodies for a production review job.
+                Experiment runs leave this unset.
 
         Returns:
             None.
         """
         self.base = base
+        self.file_cache = file_cache
 
-    async def read_path(self, path: str) -> dict[str, object]:
+    async def read_path(self, path: str, *, refresh: bool = False) -> dict[str, object]:
         """Read a changed file, or a same-repository file from the pull request head.
 
         Args:
             path: Repository path.
+            refresh: True to ignore the job cache and fetch again.
 
         Returns:
             Patch and source for a changed file. Unchanged files have status
             ``context`` and no patch. Ignored paths return an error.
+            A production job returns the Redis body when it is already stored.
         """
         if is_ignored_path(path):
             return {"error": f"{path} is ignored for review."}
+        if self.file_cache is not None and not refresh:
+            cached = await self.file_cache.get(path)
+            cached_windows = cached.get("windows") if isinstance(cached, dict) else None
+            if isinstance(cached, dict) and isinstance(cached_windows, list) and cached_windows:
+                loaded = dict(cached)
+                loaded["cached"] = True
+                if not loaded.get("note"):
+                    loaded["note"] = "Loaded from the review job cache."
+                return loaded
         changed = await self.base.get_file_content({"path": path})
         if "error" not in changed:
-            return changed
+            source = changed.get("source_text")
+            patch = changed.get("patch")
+            source_text = source.get("text") if isinstance(source, dict) else None
+            patch_text = patch.get("text") if isinstance(patch, dict) else None
+            note = changed.get("note") if isinstance(changed.get("note"), str) else None
+            record = review_file_record(
+                filename=path,
+                status=str(changed.get("status") or "modified"),
+                patch=patch_text if isinstance(patch_text, str) else None,
+                source_text=source_text if isinstance(source_text, str) else None,
+                context_lines=get_settings().review_context_lines,
+                max_chars=get_settings().review_pack_max_chars,
+                note=note,
+            )
+            if self.file_cache is not None:
+                await self.file_cache.put(path, record)
+            return record
         if not str(changed.get("error", "")).startswith("No changed file"):
             return changed
 
@@ -182,21 +234,19 @@ class Day4Tools:
             return {"error": str(exc)}
         if not text:
             return {"error": f"Could not read {path} from the pull request head."}
-        if len(text) <= TOOL_TEXT_LIMIT:
-            source_text: dict[str, object] = {"text": text, "truncated": False}
-        else:
-            source_text = {
-                "text": text[:TOOL_TEXT_LIMIT],
-                "truncated": True,
-                "original_chars": len(text),
-            }
-        return {
-            "path": path,
-            "status": "context",
-            "patch": None,
-            "source_text": source_text,
-            "note": "Not part of the diff. Loaded from the pull request head as context.",
-        }
+        note = "Not part of the diff. Loaded from the pull request head as context."
+        record = review_file_record(
+            filename=path,
+            status="context",
+            patch=None,
+            source_text=text,
+            context_lines=get_settings().review_context_lines,
+            max_chars=get_settings().review_pack_max_chars,
+            note=note,
+        )
+        if self.file_cache is not None:
+            await self.file_cache.put(path, record)
+        return record
 
     async def get_related_files(self, state: AgentState, path: str) -> dict[str, object]:
         """List one hop of imports for a file this review already read.
@@ -211,13 +261,7 @@ class Day4Tools:
         saved = state.read_files.get(path)
         if not isinstance(saved, dict):
             return {"error": f"Call get_file_content for {path} before asking for related files."}
-        saved_text = ""
-        for key in ("source_text", "patch"):
-            body = saved.get(key)
-            if isinstance(body, dict) and isinstance(body.get("text"), str):
-                saved_text = body["text"]
-                break
-        paths = related_paths(path, saved_text, set(state.read_files))
+        paths = related_paths(path, _saved_text(saved), set(state.read_files))
         return {"path": path, "related": paths, "truncated": len(paths) >= 10}
 
     async def search_code(self, query: str) -> dict[str, object]:
@@ -235,6 +279,28 @@ class Day4Tools:
         if isinstance(files, dict):
             return files
         return search_hits([(item.filename, item.patch) for item in files], query.strip())
+
+
+def _summary(name: str, arguments: dict[str, object], result: dict[str, object], cached: bool) -> dict[str, object]:
+    """Keep a short record of one tool call.
+
+    Args:
+        name: Tool name.
+        arguments: Parsed arguments.
+        result: Tool payload.
+        cached: True when a saved file body was reused.
+
+    Returns:
+        A summary without the file body.
+    """
+    target = arguments.get("path") or arguments.get("query")
+    return {
+        "name": name,
+        "path": target if isinstance(target, str) else None,
+        "cached": cached,
+        "error": result.get("error"),
+        "note": result.get("note"),
+    }
 
 
 async def _execute(
@@ -273,11 +339,19 @@ async def _execute(
             cached = dict(state.read_files[path])
             cached["cached"] = True
             cached["note"] = "Already read in this review. Full text was not fetched again."
+            if isinstance(cached.get("windows"), list) and cached["windows"]:
+                cached.pop("source_text", None)
             return cached, True
-        result = await tools.read_path(path)
+        result = await tools.read_path(path, refresh=name == "refresh_file_content")
+        from_cache = result.get("cached") is True
         if "error" not in result:
             state.read_files[path] = result
-        return result, False
+        shown = result
+        if isinstance(result.get("windows"), list) and result["windows"]:
+            shown = {
+                key: value for key, value in result.items() if key != "source_text"
+            }
+        return shown, from_cache
 
     result = await tools.base.execute(name, arguments)
     return result, False
@@ -358,16 +432,8 @@ async def run_agent(user_text: str, *, resume: bool) -> str:
                         "content": json.dumps(result, ensure_ascii=False),
                     }
                 )
-                target = arguments.get("path") or arguments.get("query")
                 state.tool_summaries.append(
-                    {
-                        "round": state.round_index,
-                        "name": name,
-                        "path": target if isinstance(target, str) else None,
-                        "cached": cached,
-                        "error": result.get("error"),
-                        "note": result.get("note"),
-                    }
+                    {"round": state.round_index, **_summary(name, arguments, result, cached)}
                 )
             state.save()
     _print_block("FINAL", f"Stopped after {MAX_ROUNDS} rounds.")

@@ -91,6 +91,18 @@ def is_ignored_path(path: str) -> bool:
     return not filter_reviewable_files([SimpleNamespace(filename=path)])
 
 
+def _python_file(module: str) -> str:
+    """Turn a dotted Python module into a repository path.
+
+    Args:
+        module: Import module, such as ``app.services.github_tokens``.
+
+    Returns:
+        A ``.py`` path.
+    """
+    return module.replace(".", "/") + ".py"
+
+
 def _import_names(raw: str) -> list[str]:
     """Split the name list that follows a Python ``import``.
 
@@ -265,6 +277,22 @@ def _normalize(path: PurePosixPath) -> str | None:
     return "/".join(parts)
 
 
+def _source_suffix(file_path: str, default: str) -> str:
+    """Choose a source suffix from the file being scanned.
+
+    Args:
+        file_path: File whose imports are being scanned.
+        default: Suffix used when the current file has a different kind.
+
+    Returns:
+        A suffix including the dot.
+    """
+    suffix = PurePosixPath(file_path).suffix.lower()
+    if suffix in {".java", ".kt", ".kts", ".scala", ".cs"}:
+        return suffix
+    return default
+
+
 def _dotted_to_path(module: str, suffix: str) -> str:
     """Turn a dotted language name into a file path.
 
@@ -308,9 +336,7 @@ def _java_family_paths(file_path: str, source: str) -> list[str]:
     Returns:
         Candidate paths. ``java.*`` and ``javax.*`` are omitted.
     """
-    suffix = PurePosixPath(file_path).suffix.lower()
-    if suffix not in {".java", ".kt", ".kts", ".scala", ".cs"}:
-        suffix = ".java"
+    suffix = _source_suffix(file_path, ".java")
     paths: list[str] = []
     for module in _JAVA.findall(source):
         top = module.split(".", 1)[0]

@@ -21,6 +21,7 @@ from app.services.github_tokens import (
     GitHubTokenUnavailable,
 )
 from app.services.openrouter_provider import OpenRouterReviewProvider
+from app.services.review_file_cache import ReviewFileCache, review_file_record
 from app.services.review_provider import ReviewFindingDraft, ReviewResult
 from billiard.exceptions import (  # pyright: ignore[reportMissingImports]
     SoftTimeLimitExceeded,  # pyright: ignore[reportMissingImports]
@@ -300,6 +301,7 @@ async def create_review_job(
     pull_request: PullRequest,
     provider: str,
     model_name: str,
+    use_agent: bool = False,
 ) -> ReviewJob:
     """Insert a pending review job.
 
@@ -308,6 +310,7 @@ async def create_review_job(
         pull_request: Pull request being reviewed.
         provider: Review provider name, currently ``openrouter``.
         model_name: Model id stored on the job and later read by the worker.
+        use_agent: True when this manual job should run the Day 6 review agent.
 
     Returns:
         The committed job. ``total_chunks`` is 0 until execution finishes.
@@ -320,6 +323,7 @@ async def create_review_job(
         model_name=model_name,
         total_files=len(pr_files),
         total_chunks=0,
+        use_agent=use_agent,
     )
     db.add(review_job)
 
@@ -335,6 +339,7 @@ async def create_review_job_if_no_active(
     pull_request: PullRequest,
     provider: str,
     model_name: str,
+    use_agent: bool = False,
 ) -> tuple[ReviewJob, bool]:
     """Return the active job for a pull request, or create one.
 
@@ -343,6 +348,7 @@ async def create_review_job_if_no_active(
         pull_request: Pull request to lock and check.
         provider: Provider stored on a newly created job.
         model_name: Model stored on a newly created job.
+        use_agent: True only for a manual review that should run the agent.
 
     Returns:
         The job and True when this call created it. False means an existing
@@ -388,10 +394,222 @@ async def create_review_job_if_no_active(
         pull_request=locked_pull_request,
         provider=provider,
         model_name=model_name,
+        use_agent=use_agent,
     )
     return review_job, True
 
 
+
+
+async def _load_review_windows(
+    *,
+    pr_files: list[PRFile],
+    http_client: httpx.AsyncClient,
+    owner_id: int | None,
+    owner_login: str,
+    repo_name: str,
+    file_cache: ReviewFileCache | None = None,
+) -> tuple[list[tuple[str, str]], list[str]]:
+    """Fetch head text and split every reviewable file into windows.
+
+    When ``file_cache`` is set, a path already stored for this job is reused
+    and a newly fetched body is written back.
+
+    Args:
+        pr_files: Synced files for the pull request.
+        http_client: Client used for GitHub file text.
+        owner_id: Repository owner, or None when the token session cannot open.
+        owner_login: GitHub owner login.
+        repo_name: GitHub repository name.
+        file_cache: Job-scoped Redis cache. Workflow review leaves this unset.
+
+    Returns:
+        Windows in file order, and notes for source fetches that failed.
+    """
+    github_token_session = (
+        GitHubTokenSession(owner_id, http_client)
+        if owner_id is not None
+        else None
+    )
+    windows: list[tuple[str, str]] = []
+    fetch_notes: list[str] = []
+    for pr_file in filter_reviewable_files(pr_files):
+        if file_cache is not None:
+            cached = await file_cache.get(pr_file.filename)
+            cached_windows = cached.get("windows") if isinstance(cached, dict) else None
+            if isinstance(cached_windows, list) and cached_windows:
+                windows.extend(
+                    (pr_file.filename, window)
+                    for window in cached_windows
+                    if isinstance(window, str)
+                )
+                continue
+
+        source_text = None
+        if pr_file.status != "removed" and github_token_session is not None:
+            contents_url = pr_file.contents_url
+            blob_sha = pr_file.sha
+            try:
+                source_text = await github_token_session.run(
+                    lambda token,
+                    contents_url=contents_url,
+                    blob_sha=blob_sha: fetch_github_file_text(
+                        http_client,
+                        token,
+                        contents_url,
+                        owner_login=owner_login,
+                        repo_name=repo_name,
+                        blob_sha=blob_sha,
+                    )
+                )
+            except SoftTimeLimitExceeded:
+                raise
+            except GitHubTokenUnavailable as exc:
+                fetch_notes.append(f"GitHub source fetch disabled: {exc}")
+                github_token_session = None
+            except Exception as exc:
+                fetch_notes.append(
+                    f"{pr_file.filename}: failed to fetch source ({exc})"
+                )
+        file_windows = build_file_windows(
+            filename=pr_file.filename,
+            status=pr_file.status,
+            patch=pr_file.patch,
+            source_text=source_text,
+            context_lines=settings.review_context_lines,
+            max_chars=settings.review_pack_max_chars,
+        )
+        windows.extend((pr_file.filename, window) for window in file_windows)
+        if file_cache is not None:
+            await file_cache.put(
+                pr_file.filename,
+                review_file_record(
+                    filename=pr_file.filename,
+                    status=pr_file.status,
+                    patch=pr_file.patch,
+                    source_text=source_text,
+                    context_lines=settings.review_context_lines,
+                    max_chars=settings.review_pack_max_chars,
+                ),
+            )
+    return windows, fetch_notes
+
+
+async def _complete_agent_review(
+    *,
+    job_id: int,
+    pull_request_id: int,
+    owner_id: int,
+    owner_login: str,
+    repo_name: str,
+    model_name: str,
+    pr_files: list[PRFile],
+    http_client: httpx.AsyncClient,
+) -> ReviewJob:
+    """Run the Day 6 review agent and store its findings on the job.
+
+    Reviewable files are split with the same window packer as the workflow.
+    ``total_chunks`` is that pack count. File bodies are stored in Redis for
+    this job id; the experiment checkpoint file is not written.
+
+    Args:
+        job_id: Local review job id.
+        pull_request_id: Local pull request id derived from the job.
+        owner_id: Repository owner. Tools bind the GitHub token to this user.
+        owner_login: GitHub owner login.
+        repo_name: GitHub repository name.
+        model_name: OpenRouter model stored on the job.
+        pr_files: Synced files used to attach finding rows and to build windows.
+        http_client: Client used for GitHub, Redis, and the agent.
+
+    Returns:
+        The completed job.
+
+    Raises:
+        ValueError: The job row disappeared, or the pull request has no reviewable windows.
+    """
+    from agent_experiments.agent_day6.agent import run_agent
+
+    file_cache = ReviewFileCache(http_client, job_id)
+    windows, fetch_notes = await _load_review_windows(
+        pr_files=pr_files,
+        http_client=http_client,
+        owner_id=owner_id,
+        owner_login=owner_login,
+        repo_name=repo_name,
+        file_cache=file_cache,
+    )
+    if not windows:
+        raise ValueError("No reviewable patch content found for this pull request.")
+    packs = pack_review_windows(
+        windows,
+        max_chars=settings.review_pack_max_chars,
+    )
+    logger.info(
+        "Review job %s agent packed %s window(s) into %s pack(s)",
+        job_id,
+        len(windows),
+        len(packs),
+    )
+    logger.info(
+        "Review job %s starting agent runtime pull_request_id=%s user_id=%s model=%s",
+        job_id,
+        pull_request_id,
+        owner_id,
+        model_name,
+    )
+    merged = await run_agent(
+        "Review this pull request. Plan the files, assign specialists, "
+        "and finish with their merged findings.",
+        user_id=owner_id,
+        pull_request_id=pull_request_id,
+        model_name=model_name,
+        save_checkpoint=False,
+        file_cache=file_cache,
+    )
+    raw_findings = merged.get("findings")
+    findings: list[ReviewFindingDraft] = []
+    if isinstance(raw_findings, list):
+        for item in raw_findings:
+            if not isinstance(item, dict) or not item.get("summary"):
+                continue
+            findings.append(
+                ReviewFindingDraft(
+                    severity=item.get("severity") or "medium",
+                    summary=str(item["summary"]),
+                    file_path=item.get("file_path") if isinstance(item.get("file_path"), str) else None,
+                    start_line=item.get("start_line") if isinstance(item.get("start_line"), int) else None,
+                    end_line=item.get("end_line") if isinstance(item.get("end_line"), int) else None,
+                    suggestion=item.get("suggestion") if isinstance(item.get("suggestion"), str) else None,
+                )
+            )
+    summary = str(merged.get("summary") or "")
+    logger.info(
+        "Review job %s agent finished findings=%s summary=%s",
+        job_id,
+        len(findings),
+        summary,
+    )
+
+    async with AsyncSessionLocal() as write_db:
+        saved_job = await write_db.get(ReviewJob, job_id)
+        if saved_job is None:
+            raise ValueError(f"Review job {job_id} was not found")
+        saved_files = await get_pull_request_files(write_db, pull_request_id)
+        saved_job.result_summary = summary
+        saved_job.total_chunks = len(packs)
+        saved_job.error_message = "\n".join(fetch_notes) if fetch_notes else None
+        await replace_review_findings(
+            db=write_db,
+            review_job=saved_job,
+            pr_files=saved_files or pr_files,
+            findings=findings,
+        )
+        saved_job.status = ReviewJobStatus.completed
+        await write_db.commit()
+        await write_db.refresh(saved_job)
+        logger.info("Review job %s agent path completed", job_id)
+        return saved_job
 
 
 async def execute_review_job(
@@ -440,6 +658,8 @@ async def execute_review_job(
     repo_name = repository.name
     provider_name = review_job.provider
     model_name = review_job.model_name
+    use_agent = bool(review_job.use_agent)
+    pull_request_id = review_job.pull_request_id
 
 
     review_job.status = ReviewJobStatus.processing
@@ -451,56 +671,32 @@ async def execute_review_job(
         if provider_name != "openrouter":
             raise ValueError(f"Unsupported provider: {provider_name}")
 
+        if use_agent:
+            if owner_id is None:
+                raise ValueError("Repository owner is missing")
+            return await _complete_agent_review(
+                job_id=job_id,
+                pull_request_id=pull_request_id,
+                owner_id=owner_id,
+                owner_login=owner_login,
+                repo_name=repo_name,
+                model_name=model_name,
+                pr_files=pr_files,
+                http_client=http_client,
+            )
+
         provider = OpenRouterReviewProvider(
             http_client=http_client,
             model_name=model_name,
         )
 
-        github_token_session = (
-            GitHubTokenSession(owner_id, http_client)
-            if owner_id is not None
-            else None
+        windows, fetch_notes = await _load_review_windows(
+            pr_files=pr_files,
+            http_client=http_client,
+            owner_id=owner_id,
+            owner_login=owner_login,
+            repo_name=repo_name,
         )
-        windows: list[tuple[str, str]] = []
-        fetch_notes: list[str] = []
-        for pr_file in filter_reviewable_files(pr_files):
-            source_text = None
-            if pr_file.status != "removed" and github_token_session is not None:
-                contents_url = pr_file.contents_url
-                blob_sha = pr_file.sha
-                try:
-                    source_text = await github_token_session.run(
-                        lambda token,
-                        contents_url=contents_url,
-                        blob_sha=blob_sha: fetch_github_file_text(
-                            http_client,
-                            token,
-                            contents_url,
-                            owner_login=owner_login,
-                            repo_name=repo_name,
-                            blob_sha=blob_sha,
-                        )
-                    )
-                except SoftTimeLimitExceeded:
-                    raise
-                except GitHubTokenUnavailable as exc:
-                    fetch_notes.append(
-                        f"GitHub source fetch disabled: {exc}"
-                    )
-                    github_token_session = None
-                except Exception as exc:
-                    fetch_notes.append(
-                        f"{pr_file.filename}: failed to fetch source ({exc})"
-                    )
-            file_windows = build_file_windows(
-                filename=pr_file.filename,
-                status=pr_file.status,
-                patch=pr_file.patch,
-                source_text=source_text,
-                context_lines=settings.review_context_lines,
-                max_chars=settings.review_pack_max_chars,
-            )
-            windows.extend((pr_file.filename, window) for window in file_windows)
 
         if not windows:
             raise ValueError("No reviewable patch content found for this pull request.")

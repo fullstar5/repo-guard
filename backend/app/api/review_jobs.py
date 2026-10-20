@@ -92,6 +92,7 @@ async def create_pull_request_review_job(
         pull_request=pull_request,
         provider=payload.provider,
         model_name=payload.model_name,
+        use_agent=payload.use_agent,
     )
 
     if created:
